@@ -15,7 +15,9 @@
 		DD7A8D5B2DB56B6600B3363E /* AbletonSamplerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D5A2DB56B6600B3363E /* AbletonSamplerUITests.swift */; };
 		DD7A8D5D2DB56B6600B3363E /* AbletonSamplerUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D5C2DB56B6600B3363E /* AbletonSamplerUITestsLaunchTests.swift */; };
 		DD7A8D6A2DB56B8500B3363E /* SamplerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D692DB56B8500B3363E /* SamplerViewModel.swift */; };
-		DD7A8D6C2DB56BA600B3363E /* ExportXMLView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D6B2DB56BA600B3363E /* ExportXMLView.swift */; };
+		DD7A8D6F2DB59A0B00B3363E /* AudioKit in Frameworks */ = {isa = PBXBuildFile; productRef = DD7A8D6E2DB59A0B00B3363E /* AudioKit */; };
+		DD7A8D712DB59B2000B3363E /* AudioSegmentEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D702DB59B2000B3363E /* AudioSegmentEditorView.swift */; };
+		DD7A8D742DB59DA700B3363E /* AudioKitUI in Frameworks */ = {isa = PBXBuildFile; productRef = DD7A8D732DB59DA700B3363E /* AudioKitUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -48,7 +50,7 @@
 		DD7A8D5A2DB56B6600B3363E /* AbletonSamplerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AbletonSamplerUITests.swift; sourceTree = "<group>"; };
 		DD7A8D5C2DB56B6600B3363E /* AbletonSamplerUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AbletonSamplerUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		DD7A8D692DB56B8500B3363E /* SamplerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SamplerViewModel.swift; sourceTree = "<group>"; };
-		DD7A8D6B2DB56BA600B3363E /* ExportXMLView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportXMLView.swift; sourceTree = "<group>"; };
+		DD7A8D702DB59B2000B3363E /* AudioSegmentEditorView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AudioSegmentEditorView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -56,6 +58,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DD7A8D742DB59DA700B3363E /* AudioKitUI in Frameworks */,
+				DD7A8D6F2DB59A0B00B3363E /* AudioKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -99,9 +103,9 @@
 		DD7A8D3D2DB56B6400B3363E /* AbletonSampler */ = {
 			isa = PBXGroup;
 			children = (
+				DD7A8D702DB59B2000B3363E /* AudioSegmentEditorView.swift */,
 				DD7A8D3E2DB56B6400B3363E /* AbletonSamplerApp.swift */,
 				DD7A8D692DB56B8500B3363E /* SamplerViewModel.swift */,
-				DD7A8D6B2DB56BA600B3363E /* ExportXMLView.swift */,
 				DD7A8D402DB56B6400B3363E /* ContentView.swift */,
 				DD7A8D422DB56B6600B3363E /* Assets.xcassets */,
 				DD7A8D472DB56B6600B3363E /* AbletonSampler.entitlements */,
@@ -151,6 +155,10 @@
 			dependencies = (
 			);
 			name = AbletonSampler;
+			packageProductDependencies = (
+				DD7A8D6E2DB59A0B00B3363E /* AudioKit */,
+				DD7A8D732DB59DA700B3363E /* AudioKitUI */,
+			);
 			productName = AbletonSampler;
 			productReference = DD7A8D3B2DB56B6400B3363E /* AbletonSampler.app */;
 			productType = "com.apple.product-type.application";
@@ -223,6 +231,10 @@
 				Base,
 			);
 			mainGroup = DD7A8D322DB56B6400B3363E;
+			packageReferences = (
+				DD7A8D6D2DB59A0B00B3363E /* XCRemoteSwiftPackageReference "AudioKit" */,
+				DD7A8D722DB59DA700B3363E /* XCRemoteSwiftPackageReference "AudioKitUI" */,
+			);
 			productRefGroup = DD7A8D3C2DB56B6400B3363E /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -267,7 +279,7 @@
 			files = (
 				DD7A8D412DB56B6400B3363E /* ContentView.swift in Sources */,
 				DD7A8D6A2DB56B8500B3363E /* SamplerViewModel.swift in Sources */,
-				DD7A8D6C2DB56BA600B3363E /* ExportXMLView.swift in Sources */,
+				DD7A8D712DB59B2000B3363E /* AudioSegmentEditorView.swift in Sources */,
 				DD7A8D3F2DB56B6400B3363E /* AbletonSamplerApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -589,6 +601,38 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		DD7A8D6D2DB59A0B00B3363E /* XCRemoteSwiftPackageReference "AudioKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/AudioKit/AudioKit.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.6.5;
+			};
+		};
+		DD7A8D722DB59DA700B3363E /* XCRemoteSwiftPackageReference "AudioKitUI" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/AudioKit/AudioKitUI.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.3.7;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		DD7A8D6E2DB59A0B00B3363E /* AudioKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DD7A8D6D2DB59A0B00B3363E /* XCRemoteSwiftPackageReference "AudioKit" */;
+			productName = AudioKit;
+		};
+		DD7A8D732DB59DA700B3363E /* AudioKitUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DD7A8D722DB59DA700B3363E /* XCRemoteSwiftPackageReference "AudioKitUI" */;
+			productName = AudioKitUI;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = DD7A8D332DB56B6400B3363E /* Project object */;
 }
