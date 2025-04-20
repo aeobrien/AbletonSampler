@@ -14,6 +14,8 @@
 		DD7A8D512DB56B6600B3363E /* AbletonSamplerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D502DB56B6600B3363E /* AbletonSamplerTests.swift */; };
 		DD7A8D5B2DB56B6600B3363E /* AbletonSamplerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D5A2DB56B6600B3363E /* AbletonSamplerUITests.swift */; };
 		DD7A8D5D2DB56B6600B3363E /* AbletonSamplerUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D5C2DB56B6600B3363E /* AbletonSamplerUITestsLaunchTests.swift */; };
+		DD7A8D6A2DB56B8500B3363E /* SamplerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D692DB56B8500B3363E /* SamplerViewModel.swift */; };
+		DD7A8D6C2DB56BA600B3363E /* ExportXMLView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D6B2DB56BA600B3363E /* ExportXMLView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -45,6 +47,8 @@
 		DD7A8D562DB56B6600B3363E /* AbletonSamplerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AbletonSamplerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DD7A8D5A2DB56B6600B3363E /* AbletonSamplerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AbletonSamplerUITests.swift; sourceTree = "<group>"; };
 		DD7A8D5C2DB56B6600B3363E /* AbletonSamplerUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AbletonSamplerUITestsLaunchTests.swift; sourceTree = "<group>"; };
+		DD7A8D692DB56B8500B3363E /* SamplerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SamplerViewModel.swift; sourceTree = "<group>"; };
+		DD7A8D6B2DB56BA600B3363E /* ExportXMLView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportXMLView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -96,6 +100,8 @@
 			isa = PBXGroup;
 			children = (
 				DD7A8D3E2DB56B6400B3363E /* AbletonSamplerApp.swift */,
+				DD7A8D692DB56B8500B3363E /* SamplerViewModel.swift */,
+				DD7A8D6B2DB56BA600B3363E /* ExportXMLView.swift */,
 				DD7A8D402DB56B6400B3363E /* ContentView.swift */,
 				DD7A8D422DB56B6600B3363E /* Assets.xcassets */,
 				DD7A8D472DB56B6600B3363E /* AbletonSampler.entitlements */,
@@ -260,6 +266,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				DD7A8D412DB56B6400B3363E /* ContentView.swift in Sources */,
+				DD7A8D6A2DB56B8500B3363E /* SamplerViewModel.swift in Sources */,
+				DD7A8D6C2DB56BA600B3363E /* ExportXMLView.swift in Sources */,
 				DD7A8D3F2DB56B6400B3363E /* AbletonSamplerApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

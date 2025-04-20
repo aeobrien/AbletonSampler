@@ -1,17 +1,12 @@
-//
-//  AbletonSamplerApp.swift
-//  AbletonSampler
-//
-//  Created by Aidan O'Brien on 20/04/2025.
-//
-
+// File: HabitStacker/HabitStackerApp.swift
 import SwiftUI
 
 @main
-struct AbletonSamplerApp: App {
+struct HabitStackerApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(SamplerViewModel()) // Provide the view model to the environment
         }
     }
 }
