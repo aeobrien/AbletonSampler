@@ -790,7 +790,19 @@ class SamplerViewModel: ObservableObject {
                                 <Type> <Manual Value="0" /> </Type> <!-- Lowpass -->
                                 <Freq> <Manual Value="22000" /> </Freq>
                                 <Res> <Manual Value="0" /> </Res>
-                                <!-- other Filter defaults -->
+                                <!-- Other Filter properties like Slope, Drive, etc. would go here -->
+
+                                <!-- Add Filter Envelope if needed -->
+                                <!-- <Envelope> ... </Envelope> -->
+
+                                <!-- Add ModByPitch inside SimplerFilter -->
+                                <ModByPitch>
+                                    <LomId Value="0" />
+                                    <Manual Value="0" /> <!-- Ensure Key Tracking defaults to 0 -->
+                                    <!-- Add AutomationTarget/ModulationTarget/MidiControllerRange if needed -->
+                                </ModByPitch>
+
+                                <!-- other SimplerFilter defaults -->
                              </SimplerFilter>
                          </Value>
                      </Slot>

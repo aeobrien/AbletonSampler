@@ -71,6 +71,10 @@ struct AudioSegmentEditorView: View {
     @State private var autoMapStartNote: Int = 0 // Starting note for note mapping
     @State private var velocityMapTargetNote: Int = 0 // Target note for velocity mapping
 
+    // --- NEW: Transient Detection State ---
+    @State private var transientThreshold: Double = 0.1 // Default sensitivity (0.0 to 1.0)
+    // Higher value = less sensitive (fewer markers), Lower value = more sensitive (more markers)
+
     // --- Computed Property: Number of Segments ---
     private var numberOfSegments: Int {
         markers.count + 1
@@ -157,6 +161,34 @@ struct AudioSegmentEditorView: View {
             }
             .frame(height: 150)
             .padding(.horizontal)
+
+            // --- Marker Controls ---
+             HStack {
+                 Button("Clear All Markers") {
+                     markers.removeAll()
+                     selectedSegmentIndex = nil // Deselect segment if markers are cleared
+                 }
+                 .disabled(markers.isEmpty)
+
+                 Spacer()
+
+                 // --- NEW: Transient Detection Controls ---
+                 VStack(alignment: .trailing) {
+                     Button("Detect Transients") {
+                         detectAndSetTransients()
+                     }
+                     .disabled(isLoadingWaveform || waveformRMSData.isEmpty)
+
+                     HStack {
+                         Text("Sensitivity:")
+                         Slider(value: $transientThreshold, in: 0.01...1.0) // Avoid 0 threshold
+                             .frame(width: 100)
+                     }
+                     .font(.caption)
+                 }
+                 // -------------------------------------
+             }
+             .padding(.horizontal)
 
             // --- Segment Information & Mapping ---
             Text(audioInfo)
@@ -252,7 +284,7 @@ struct AudioSegmentEditorView: View {
             }
         }
         .padding()
-        .frame(minWidth: 550, minHeight: 500) // Increased size for new controls
+        .frame(minWidth: 550, minHeight: 550) // Increased height for new controls
         .task(loadAudioAndWaveform) // Use .task for async work tied to view lifetime
     }
 
@@ -383,6 +415,93 @@ struct AudioSegmentEditorView: View {
         print("Moved marker \(index) to normalized position: \(newNormalizedValue)")
     }
 
+    // --- NEW: Transient Detection Logic ---
+
+    /// Detects transients based on the `transientThreshold` and updates the `markers` state.
+    private func detectAndSetTransients() {
+        guard !waveformRMSData.isEmpty else {
+            print("Cannot detect transients: Waveform data not available.")
+            return
+        }
+
+        // Invert threshold: Slider goes 0.01 (high sensitivity) to 1.0 (low sensitivity)
+        // We want a *lower* internal threshold for *higher* sensitivity.
+        // A simple inversion like (1.0 - threshold) can work. Adjust range/scaling as needed.
+        let internalThreshold = 1.0 - transientThreshold
+        print("Detecting transients with internal threshold: \(internalThreshold) (Slider: \(transientThreshold))")
+
+        let detectedMarkers = findTransients(in: waveformRMSData, threshold: Float(internalThreshold))
+
+        print("Detected \(detectedMarkers.count) transients.")
+        // Replace existing markers with detected ones
+        self.markers = detectedMarkers
+        self.selectedSegmentIndex = nil // Deselect any selected segment
+    }
+
+    /// Analyzes waveform data to find transient points.
+    /// - Parameter data: Array of RMS or similar amplitude values.
+    /// - Parameter threshold: Sensitivity threshold (lower value detects more).
+    /// - Returns: An array of normalized marker positions (0.0 to 1.0).
+    private func findTransients(in data: [Float], threshold: Float) -> [Double] {
+        guard data.count > 1 else { return [] }
+
+        var transientPositions: [Double] = []
+        let dataCount = data.count
+        let minEnergyThreshold: Float = 0.005 // Ignore very low energy changes
+
+        // Calculate differences between consecutive RMS values
+        var differences: [Float] = []
+        for i in 0..<(dataCount - 1) {
+            let diff = abs(data[i+1] - data[i])
+            differences.append(diff)
+        }
+
+        // Find the maximum difference for normalization (optional but good)
+        guard let maxDifference = differences.max(), maxDifference > 0 else {
+            print("No significant differences found in RMS data.")
+            return [] // No differences to analyze
+        }
+
+        print("Max RMS difference: \(maxDifference)")
+
+        // Detect peaks in the differences that exceed the threshold
+        for i in 0..<differences.count {
+            let normalizedDiff = differences[i] / maxDifference // Normalize difference
+
+            // Check if the normalized difference exceeds the threshold
+            // AND if the energy at this point is above a minimum threshold
+            if normalizedDiff > threshold && data[i+1] > minEnergyThreshold {
+
+                // Add a marker slightly *before* the detected rise (at index i)
+                let normalizedPosition = Double(i) / Double(dataCount - 1) // Normalize index
+
+                // Avoid adding markers too close to each other (simple debounce)
+                let minDistance: Double = 0.01 // e.g., 1% of waveform width
+                if let lastMarker = transientPositions.last {
+                    if (normalizedPosition - lastMarker) < minDistance {
+                        // print("Skipping transient too close to previous one at \(normalizedPosition)")
+                        continue // Skip if too close
+                    }
+                }
+
+                 // Add a small offset to place marker slightly before the detected point if needed
+                // let offset = -0.005 // e.g., shift back 0.5%
+                // let finalPosition = max(0.0, min(1.0, normalizedPosition + offset))
+
+                let finalPosition = max(0.0, min(1.0, normalizedPosition)) // Use original position for now
+
+                transientPositions.append(finalPosition)
+                // print("Transient detected at index \(i), normalized: \(finalPosition)")
+            }
+        }
+
+        // Ensure markers are sorted
+        transientPositions.sort()
+        return transientPositions
+    }
+
+    // --- End Transient Detection Logic ---
+
     private func assignSegmentToNote(segmentIndex: Int) {
         guard let frames = totalFrames, frames > 0 else {
             print("Cannot assign segment: Total frames not available or zero.")
@@ -428,126 +547,168 @@ struct AudioSegmentEditorView: View {
 
     // --- NEW: Auto-Mapping Functions ---
 
-    /// Maps each segment to a consecutive MIDI note, starting from `startNote`.
+    /// Maps each segment defined by markers to a consecutive MIDI note, starting from `startNote`.
+    /// Skips the implicit segment from 0.0 to the first marker unless a marker exists near 0.0.
     private func autoMapSegmentsToNotes(startNote: Int) {
         guard let frames = totalFrames, frames > 0 else {
             viewModel.showError("Audio file not fully loaded for auto-mapping.")
             return
         }
-        guard numberOfSegments > 0 else {
-             viewModel.showError("No segments defined by markers.")
+        // Require at least one marker to define any segments
+        guard !markers.isEmpty else {
+             viewModel.showError("No markers defined to create segments.")
              return
-         }
+        }
 
-        print("Auto-mapping \(numberOfSegments) segments to notes starting from \(startNote)...")
+        // Determine if the first marker is effectively at the start
+        let tolerance = 0.001 // How close to 0.0 is considered the start
+        let includeFirstImplicitSegment = markers[0] < tolerance
 
-        // It's safer to collect all segment data first, then pass to ViewModel
-        // to handle potential replacements in one go, but for simplicity, we add one by one.
+        // Calculate the number of segments to map based on markers
+        let numberOfMappableSegments = includeFirstImplicitSegment ? markers.count + 1 : markers.count
 
-        for segmentIndex in 0..<numberOfSegments {
-            let targetNote = startNote + segmentIndex
-            // Clamp target note to the available range (0-11 for now, or 0-127 if needed)
-            let clampedTargetNote = max(0, min(11, targetNote))
+        // Calculate the starting index for the loop
+        let loopStartIndex = includeFirstImplicitSegment ? 0 : 1
+        // Calculate the index offset for accessing the markers array
+        let markerIndexOffset = includeFirstImplicitSegment ? 1 : 0
+
+        print("Auto-mapping \(numberOfMappableSegments) segments to notes starting from \(startNote)...")
+        print(includeFirstImplicitSegment ? "Including implicit segment from start." : "Skipping implicit segment from start.")
+
+        for segmentLoopIndex in loopStartIndex..<(markers.count + 1) {
+            // Calculate the effective segment index relative to the potential full list of segments (including implicit first)
+            let effectiveSegmentIndex = segmentLoopIndex
+            // Calculate the target MIDI note, adjusted by how many segments we actually map
+            let noteOffset = segmentLoopIndex - loopStartIndex
+            let targetNote = startNote + noteOffset
+
+            // Clamp target note
+            let clampedTargetNote = max(0, min(127, targetNote)) // Use 0-127 range
             if targetNote != clampedTargetNote {
                 print("Warning: Target note \(targetNote) clamped to \(clampedTargetNote).")
             }
 
-            let startMarkerValue = (segmentIndex == 0) ? 0.0 : markers[segmentIndex - 1]
-            let endMarkerValue = (segmentIndex == markers.count) ? 1.0 : markers[segmentIndex]
+            // Determine start and end markers based on the effective segment index
+            let startMarkerValue = (effectiveSegmentIndex == 0) ? 0.0 : markers[effectiveSegmentIndex - 1]
+            let endMarkerValue = (effectiveSegmentIndex == markers.count) ? 1.0 : markers[effectiveSegmentIndex]
 
             let startSample = Int64(startMarkerValue * Double(frames))
             let endSample = Int64(endMarkerValue * Double(frames))
 
             guard startSample < endSample else {
-                print("Skipping zero-length segment \(segmentIndex + 1) for note mapping.")
+                print("Skipping zero-length segment \(effectiveSegmentIndex + 1) for note mapping.")
                 continue // Skip empty segments
             }
 
-            print(" -> Mapping Segment \(segmentIndex + 1) [\(startSample)-\(endSample)] to Note \(clampedTargetNote)")
+            print(" -> Mapping Segment \(effectiveSegmentIndex + 1) [\(startSample)-\(endSample)] to Note \(clampedTargetNote)")
             viewModel.addSampleSegment(
                 sourceFileURL: audioFileURL,
                 segmentStartSample: startSample,
                 segmentEndSample: endSample,
                 targetNote: clampedTargetNote
-                // Default name and full velocity range are used
             )
         }
         print("Finished auto-mapping to notes.")
-        // Optionally dismiss the view after auto-mapping?
-        // dismiss()
     }
 
-    /// Maps all segments to a single `targetNote` with distributed velocity zones.
+    /// Maps segments defined by markers to a single `targetNote` with distributed velocity zones.
+    /// Skips the implicit segment from 0.0 to the first marker unless a marker exists near 0.0.
     private func autoMapSegmentsToVelocity(targetNote: Int) {
         guard let frames = totalFrames, frames > 0 else {
             viewModel.showError("Audio file not fully loaded for auto-mapping.")
             return
         }
-        guard numberOfSegments > 0 else {
-             viewModel.showError("No segments defined by markers.")
-             return
-         }
+        // Require at least one marker
+        guard !markers.isEmpty else {
+            viewModel.showError("No markers defined to create segments.")
+            return
+        }
 
-        print("Auto-mapping \(numberOfSegments) segments to velocity zones on note \(targetNote)...")
+        // Determine if the first marker is effectively at the start
+        let tolerance = 0.001
+        let includeFirstImplicitSegment = markers[0] < tolerance
 
-        // --- Calculate Velocity Ranges (Simplified Separate Logic) ---
-        // Ideally, reuse or call SamplerViewModel logic
+        // Calculate the number of segments to map
+        let numberOfMappableSegments = includeFirstImplicitSegment ? markers.count + 1 : markers.count
+        // Calculate the starting index for the loop
+        let loopStartIndex = includeFirstImplicitSegment ? 0 : 1
+
+        print("Auto-mapping \(numberOfMappableSegments) segments to velocity zones on note \(targetNote)...")
+        print(includeFirstImplicitSegment ? "Including implicit segment from start." : "Skipping implicit segment from start.")
+
+        // --- Calculate Velocity Ranges for the *mappable* segments --- 
         var velocityRanges: [VelocityRangeData] = []
-        if numberOfSegments == 1 {
+        if numberOfMappableSegments == 1 {
+            // If only one segment is being mapped (either explicit or implicit-included)
             velocityRanges = [.fullRange]
-        } else {
+        } else if numberOfMappableSegments > 1 {
             let totalVelocityRange = 128.0
-            let baseWidth = totalVelocityRange / Double(numberOfSegments)
+            let baseWidth = totalVelocityRange / Double(numberOfMappableSegments)
             var currentMin = 0.0
-            for i in 0..<numberOfSegments {
+            for i in 0..<numberOfMappableSegments { // Iterate for the actual number of segments being mapped
                 let calculatedMax = currentMin + baseWidth - 1.0
                 var zoneMin = Int(currentMin.rounded(.down))
                 var zoneMax = Int(calculatedMax.rounded(.down))
-                if i == numberOfSegments - 1 { zoneMax = 127 }
+                // Ensure the very last zone reaches 127
+                if i == numberOfMappableSegments - 1 { zoneMax = 127 }
                 zoneMin = max(0, zoneMin)
-                zoneMax = max(zoneMin, zoneMax)
+                zoneMax = max(zoneMin, zoneMax) // Ensure max >= min
                 zoneMax = min(127, zoneMax)
                 let range = VelocityRangeData(min: zoneMin, max: zoneMax, crossfadeMin: zoneMin, crossfadeMax: zoneMax)
                 velocityRanges.append(range)
                 currentMin = Double(zoneMax) + 1.0
             }
-             // Minimal adjustment for last range edge case
-            if var lastRange = velocityRanges.popLast() { // Check if not empty
-                if lastRange.max < 127 && numberOfSegments > 1 {
-                     if var secondLastRange = velocityRanges.popLast() { // Check again
-                        secondLastRange = VelocityRangeData(min: secondLastRange.min, max: max(secondLastRange.min, lastRange.min - 1), crossfadeMin: secondLastRange.crossfadeMin, crossfadeMax: max(secondLastRange.min, lastRange.min - 1))
-                        velocityRanges.append(secondLastRange)
+            // Refined adjustment for last range edge case
+            if velocityRanges.count > 1 { // Need at least 2 ranges for this adjustment
+                if var lastRange = velocityRanges.popLast() { // Use optional binding
+                    if lastRange.max < 127 {
+                        lastRange = VelocityRangeData(min: lastRange.min, max: 127, crossfadeMin: lastRange.crossfadeMin, crossfadeMax: 127)
+                        if var secondLastRange = velocityRanges.popLast() { // Check again
+                             // Adjust the second-to-last range to end just before the last one starts
+                            let newSecondLastMax = max(secondLastRange.min, lastRange.min - 1)
+                            secondLastRange = VelocityRangeData(min: secondLastRange.min, max: newSecondLastMax, crossfadeMin: secondLastRange.crossfadeMin, crossfadeMax: newSecondLastMax)
+                            velocityRanges.append(secondLastRange)
+                        } else {
+                            // If there was only one range before, adjust its max (shouldn't happen if count > 1)
+                            lastRange = VelocityRangeData(min: 0, max: 127, crossfadeMin: 0, crossfadeMax: 127)
+                        }
                     }
-                    lastRange = VelocityRangeData(min: lastRange.min, max: 127, crossfadeMin: lastRange.crossfadeMin, crossfadeMax: 127)
+                     velocityRanges.append(lastRange)
                 }
-                velocityRanges.append(lastRange)
             }
         }
-        guard velocityRanges.count == numberOfSegments else {
-            print("Error: Velocity range calculation mismatch.")
+
+        guard velocityRanges.count == numberOfMappableSegments else {
+            print("Error: Velocity range calculation mismatch. Expected \(numberOfMappableSegments), got \(velocityRanges.count)")
             viewModel.showError("Internal error calculating velocity ranges.")
             return
         }
         // --- End Velocity Calculation ---
 
-
         // Collect segment data first before calling ViewModel
         var segmentInfos: [(start: Int64, end: Int64, velocity: VelocityRangeData)] = []
-        for segmentIndex in 0..<numberOfSegments {
-            let startMarkerValue = (segmentIndex == 0) ? 0.0 : markers[segmentIndex - 1]
-            let endMarkerValue = (segmentIndex == markers.count) ? 1.0 : markers[segmentIndex]
+
+        for segmentLoopIndex in loopStartIndex..<(markers.count + 1) {
+            // Calculate the effective segment index relative to the potential full list
+            let effectiveSegmentIndex = segmentLoopIndex
+            // Calculate the index for the velocity range array (0-based for mapped segments)
+            let velocityRangeIndex = segmentLoopIndex - loopStartIndex
+
+            // Get segment boundaries
+            let startMarkerValue = (effectiveSegmentIndex == 0) ? 0.0 : markers[effectiveSegmentIndex - 1]
+            let endMarkerValue = (effectiveSegmentIndex == markers.count) ? 1.0 : markers[effectiveSegmentIndex]
             let startSample = Int64(startMarkerValue * Double(frames))
             let endSample = Int64(endMarkerValue * Double(frames))
-            let velocityRange = velocityRanges[segmentIndex]
 
             if startSample < endSample {
+                 let velocityRange = velocityRanges[velocityRangeIndex]
                  segmentInfos.append((start: startSample, end: endSample, velocity: velocityRange))
-                 print(" -> Preparing Segment \(segmentIndex + 1) [\(startSample)-\(endSample)] for Vel [\(velocityRange.min)-\(velocityRange.max)]")
+                 print(" -> Preparing Segment \(effectiveSegmentIndex + 1) [\(startSample)-\(endSample)] for Vel [\(velocityRange.min)-\(velocityRange.max)]")
             } else {
-                 print("Skipping zero-length segment \(segmentIndex + 1) for velocity mapping.")
+                 print("Skipping zero-length segment \(effectiveSegmentIndex + 1) for velocity mapping.")
             }
         }
-        
+
         // Call ViewModel function for each prepared segment info
         print("Submitting \(segmentInfos.count) segments to ViewModel for note \(targetNote)...")
         for info in segmentInfos {
@@ -561,8 +722,6 @@ struct AudioSegmentEditorView: View {
         }
 
         print("Finished auto-mapping to velocity zones.")
-        // Optionally dismiss the view after auto-mapping?
-        // dismiss()
     }
 }
 
