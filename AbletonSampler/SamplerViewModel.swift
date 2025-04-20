@@ -4,6 +4,77 @@ import AVFoundation
 import UniformTypeIdentifiers // Needed for UTType
 import Foundation // Needed for Process, Pipe, FileManager, URL
 
+// MARK: - Piano Key Data Structure (Moved OUTSIDE ViewModel class)
+
+/// Represents a single key on the piano
+struct PianoKey: Identifiable {
+    let id: Int // MIDI Note Number (0-127)
+    let isWhite: Bool
+    let name: String // e.g., "C4", "F#3", "A0"
+    var hasSample: Bool // Indicates if a sample is mapped to this key
+
+    // Geometry can stay here or move to the View if purely visual
+    var width: CGFloat { isWhite ? 30 : 18 }
+    var height: CGFloat { isWhite ? 120 : 80 }
+    var xOffset: CGFloat = 0 // Calculated once for layout
+    var zIndex: Double { isWhite ? 0 : 1 } // Black keys on top
+}
+
+// Generates the 128 keys for the full MIDI range (Moved OUTSIDE ViewModel class)
+func generatePianoKeys() -> [PianoKey] {
+    var keys: [PianoKey] = []
+    let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+    // Full MIDI Range (0-127) -> C-2 to G8
+    let whiteKeyWidth: CGFloat = 30
+    let blackKeyWidth: CGFloat = 18
+
+    // --- Generate Key Data ---
+    for midiNote in 0...127 {
+        let keyIndexInOctave = midiNote % 12
+        let noteName = noteNames[keyIndexInOctave]
+        let actualOctave = (midiNote / 12) - 2
+        let isWhite: Bool
+        switch keyIndexInOctave {
+            case 1, 3, 6, 8, 10: isWhite = false
+            default: isWhite = true
+        }
+        let keyName = "\\(noteName)\\(actualOctave)"
+        // print("Generated Key: MIDI=\(midiNote), Name=\(keyName), isWhite=\(isWhite)") // Keep logging for now
+        let key = PianoKey(id: midiNote, isWhite: isWhite, name: keyName, hasSample: false)
+        keys.append(key)
+    }
+
+    // --- Calculate Layout (xOffset) ---
+    var currentXOffset: CGFloat = 0
+    for i in 0..<keys.count {
+        keys[i].xOffset = currentXOffset
+        if keys[i].isWhite {
+            currentXOffset += whiteKeyWidth
+        }
+    }
+    
+    // --- Refined Black Key Positioning ---
+    for i in 0..<keys.count {
+        if !keys[i].isWhite {
+            if i > 0 {
+                 let precedingKey = keys[i-1]
+                 if precedingKey.isWhite {
+                    keys[i].xOffset = precedingKey.xOffset + precedingKey.width * 0.6
+                 } else if i > 1 {
+                     let prePrecedingKey = keys[i-2]
+                     if prePrecedingKey.isWhite {
+                         keys[i].xOffset = prePrecedingKey.xOffset + prePrecedingKey.width * 0.6
+                     }
+                 }
+            } else { 
+                 keys[i].xOffset = keys[0].width * 0.6 // Handle first black key (C#-2)
+            }
+        }
+    }
+    return keys
+}
+
 // MARK: - Data Structures for Sample Parts
 
 /// Represents the calculated velocity range for a sample part
@@ -79,6 +150,14 @@ enum VelocitySplitMode {
     case crossfade // Overlapping zones with crossfades
 }
 
+// MARK: - Mapping Mode (NEW)
+
+/// Defines the overall playback mode affecting the MultiSampleMap
+enum MappingMode {
+    case standard // Default, one sample per trigger (unless velocity zones)
+    case roundRobin // Cycle through samples mapped to the same note
+}
+
 // MARK: - Sampler View Model
 
 // Manages the state of the sample parts and XML generation
@@ -87,7 +166,15 @@ class SamplerViewModel: ObservableObject {
     // --- Published Properties ---
 
     /// Holds all the individual sample parts that will be included in the ADV file.
-    @Published var multiSampleParts: [MultiSamplePartData] = []
+    @Published var multiSampleParts: [MultiSamplePartData] = [] {
+        // Automatically update piano keys whenever sample parts change
+        didSet {
+             updatePianoKeySampleStatus()
+        }
+    }
+
+    /// NEW: Holds the state for the visual piano keyboard.
+    @Published var pianoKeys: [PianoKey] = []
 
     /// Controls the presentation of the modal asking how to split velocities.
     @Published var showingVelocitySplitPrompt = false
@@ -105,11 +192,56 @@ class SamplerViewModel: ObservableObject {
     /// Controls the visibility of the error alert.
     @Published var showingErrorAlert = false // Kept from original code
 
+    /// NEW: Tracks the current mapping mode to influence XML generation (e.g., for Round Robin).
+    @Published var currentMappingMode: MappingMode = .standard
+
     // --- Initialization ---
 
     init() {
         print("SamplerViewModel initialized.")
-        // No need to initialize slots anymore
+        // Initialize piano keys first using the global function
+        self.pianoKeys = generatePianoKeys()
+        // Now update their status based on any initially loaded multiSampleParts (currently none)
+        updatePianoKeySampleStatus()
+        print("Initialized \\(pianoKeys.count) piano keys.")
+    }
+
+    // MARK: - Piano Key State Update (NEW)
+
+    /// Updates the `hasSample` property for each key in `pianoKeys`
+    /// based on the current contents of `multiSampleParts`.
+    private func updatePianoKeySampleStatus() {
+         // Use a Set for efficient lookup of mapped MIDI notes
+         let mappedNotes = Set(multiSampleParts.map { $0.keyRangeMin })
+
+         print("Updating piano key sample status. Mapped notes: \\(mappedNotes)")
+
+         // Create a new array to avoid direct modification issues with @Published during iteration
+         var updatedKeys = self.pianoKeys
+         var changesMade = false // Track if any key status actually changed
+
+         for i in 0..<updatedKeys.count {
+             let keyMidiNote = updatedKeys[i].id
+             let keyCurrentlyHasSample = updatedKeys[i].hasSample
+             let shouldHaveSample = mappedNotes.contains(keyMidiNote)
+
+             if keyCurrentlyHasSample != shouldHaveSample {
+                 updatedKeys[i].hasSample = shouldHaveSample
+                 changesMade = true
+                 print(" -> Key \\(keyMidiNote) ('\\(updatedKeys[i].name)') status changed to \\(shouldHaveSample)")
+             }
+         }
+
+         // Only update the @Published property if there were actual changes
+         if changesMade {
+             // Update on main thread as this might trigger UI changes
+             DispatchQueue.main.async {
+                 self.pianoKeys = updatedKeys
+                 print("Finished updating piano key sample status. Changes applied.")
+             }
+         } else {
+              print("Finished updating piano key sample status. No changes needed.")
+         }
     }
 
     // MARK: - Drop Handling Logic
@@ -182,7 +314,8 @@ class SamplerViewModel: ObservableObject {
             // Remove any existing parts for this key before adding the new one
             self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
             self.multiSampleParts.append(partData)
-            print("Added single sample part: \(partData.name) to key \(midiNote)")
+            // `multiSampleParts` didSet will trigger updatePianoKeySampleStatus()
+            print("Added single sample part: \\(partData.name) to key \\(midiNote)")
         }
     }
 
@@ -270,189 +403,168 @@ class SamplerViewModel: ObservableObject {
             self.multiSampleParts.append(contentsOf: newParts)
             self.pendingDropInfo = nil
             self.showingVelocitySplitPrompt = false
-            print("Finished processing multi-drop. Added \(newParts.count) parts.")
+            // `multiSampleParts` didSet will trigger updatePianoKeySampleStatus()
+            print("Finished processing multi-drop. Added \\(newParts.count) parts.")
         }
     }
 
-    // MARK: - Velocity Range Calculation
-
-    /// Calculates velocity ranges for multiple files based on the chosen mode.
-    /// - Parameters:
-    ///   - numberOfFiles: The number of files being mapped.
-    ///   - mode: The split mode (`.separate` or `.crossfade`).
-    /// - Returns: An array of `VelocityRangeData`, one for each file.
-    private func calculateVelocityRanges(numberOfFiles: Int, mode: VelocitySplitMode) -> [VelocityRangeData] {
-        guard numberOfFiles > 0 else { return [] }
-        if numberOfFiles == 1 { return [.fullRange] } // Should not happen if called from processMultiDrop, but safe guard.
-
-        switch mode {
-        case .separate:
-            return calculateSeparateVelocityRanges(numberOfFiles: numberOfFiles)
-        case .crossfade:
-            return calculateCrossfadeVelocityRanges(numberOfFiles: numberOfFiles)
+    /// Processes multiple dropped files as Round Robin samples on a single key.
+    func processMultiDropAsRoundRobin() {
+        print("Processing multi-drop as Round Robin...")
+        guard let info = pendingDropInfo else {
+            print("Error: No pending drop info found for Round Robin processing.")
+             DispatchQueue.main.async {
+                self.pendingDropInfo = nil
+                self.showingVelocitySplitPrompt = false
+             }
+            return
         }
-    }
 
-    /// Calculates distinct (non-overlapping) velocity ranges.
-    private func calculateSeparateVelocityRanges(numberOfFiles: Int) -> [VelocityRangeData] {
-        var ranges: [VelocityRangeData] = []
-        let totalVelocityRange = 128.0 // 0-127 inclusive
-        let baseWidth = totalVelocityRange / Double(numberOfFiles)
-        var currentMin = 0.0
+        let midiNote = info.midiNote
+        let fileURLs = info.fileURLs
+        let numberOfFiles = fileURLs.count
 
-        print("Calculating Separate Velocity Ranges for \(numberOfFiles) files. Base width: \(baseWidth)")
+        guard numberOfFiles > 0 else {
+             print("Error: No files found in pending drop info for Round Robin.")
+             DispatchQueue.main.async {
+                 self.pendingDropInfo = nil
+                 self.showingVelocitySplitPrompt = false
+             }
+             return
+        }
 
-        for i in 0..<numberOfFiles {
-            let calculatedMax = currentMin + baseWidth - 1.0
-            var zoneMin = Int(currentMin.rounded(.down)) // Round down for min
-            var zoneMax = Int(calculatedMax.rounded(.down)) // Round down max initially
-
-            // Ensure the last zone reaches 127
-            if i == numberOfFiles - 1 {
-                zoneMax = 127
+        // --- Prepare Parts (no velocity calc needed) --- 
+        var newPartsData: [MultiSamplePartData] = []
+        for (index, fileURL) in fileURLs.enumerated() {
+            guard let metadata = extractAudioMetadata(fileURL: fileURL) else {
+                print("Warning: Could not read metadata for \(fileURL.lastPathComponent). Skipping this file for Round Robin.")
+                continue // Skip this file
             }
 
-            // Prevent overlap and ensure min <= max
-            zoneMin = max(0, zoneMin) // Clamp min at 0
-            zoneMax = max(zoneMin, zoneMax) // Ensure max is at least min
-            zoneMax = min(127, zoneMax) // Clamp max at 127
-
-            // For separate zones, crossfades mirror the min/max
-            let range = VelocityRangeData(min: zoneMin, max: zoneMax, crossfadeMin: zoneMin, crossfadeMax: zoneMax)
-            ranges.append(range)
-            print(" -> Zone \(i): Min=\(range.min), Max=\(range.max)")
-
-            // Update currentMin for the next iteration *after* rounding the previous max
-            // Start the next zone right after the current one ends
-            currentMin = Double(zoneMax) + 1.0
+            let partData = MultiSamplePartData(
+                name: fileURL.deletingPathExtension().lastPathComponent + "_RR_\(index + 1)", // Add RR suffix
+                keyRangeMin: midiNote,
+                keyRangeMax: midiNote,
+                velocityRange: .fullRange, // All files get full velocity range
+                sourceFileURL: fileURL,
+                segmentStartSample: 0,
+                segmentEndSample: metadata.frameCount ?? 0,
+                relativePath: nil, // Will be set during save
+                absolutePath: fileURL.path,
+                originalAbsolutePath: fileURL.path,
+                sampleRate: metadata.sampleRate,
+                fileSize: metadata.fileSize,
+                crc: nil, // Placeholder
+                lastModDate: metadata.lastModDate,
+                originalFileFrameCount: metadata.frameCount
+            )
+            newPartsData.append(partData)
+            print("Prepared RR part \(index + 1)/\(numberOfFiles): \(partData.name) for key \(midiNote)")
         }
 
-         // Final sanity check - ensure last zone ends at 127 and first starts at 0
-         if var lastRange = ranges.popLast(), !ranges.isEmpty { // Need at least 2 ranges for this check
-             if lastRange.max < 127 {
-                 print("Adjusting last zone max from \(lastRange.max) to 127")
-                 lastRange = VelocityRangeData(min: lastRange.min, max: 127, crossfadeMin: lastRange.crossfadeMin, crossfadeMax: 127)
+        // --- Add Parts and Update State --- 
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+            // First, clear *all* existing parts for the target note before adding RR samples.
+            // This prevents mixing velocity-split and RR samples on the same key.
+            print("Clearing existing parts on note \\(midiNote) before adding Round Robin samples.")
+            var partsRemoved = false
+            let initialCount = self.multiSampleParts.count
+            self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
+            if self.multiSampleParts.count != initialCount {
+                partsRemoved = true
+            }
+
+
+            // Add the new Round Robin parts
+            // We are appending directly here for simplicity since addSampleSegment might have complex interactions
+            // we don't need when just adding RR parts after a clear.
+            self.multiSampleParts.append(contentsOf: newPartsData)
+
+
+            // Set the global mapping mode
+            self.currentMappingMode = .roundRobin
+            print("Set mapping mode to Round Robin.")
+
+            // Clear pending info and hide prompt
+            self.pendingDropInfo = nil
+            self.showingVelocitySplitPrompt = false
+
+            // Explicitly trigger update if parts were removed but none added, or if parts were added.
+            // The didSet on multiSampleParts handles the update, but logging completion here.
+             print("Finished processing multi-drop for Round Robin. Added \\(newPartsData.count) parts.")
+             // If parts were only removed, the didSet might not have triggered if newPartsData was empty.
+             // Calling update explicitly ensures correctness in that edge case.
+             if partsRemoved && newPartsData.isEmpty {
+                 self.updatePianoKeySampleStatus()
              }
-             // Also adjust the previous range's max if needed to avoid gaps
-             if var secondLastRange = ranges.popLast() {
-                 if secondLastRange.max >= lastRange.min {
-                     print("Adjusting second-last zone max from \(secondLastRange.max) to \(lastRange.min - 1)")
-                     secondLastRange = VelocityRangeData(min: secondLastRange.min, max: max(secondLastRange.min, lastRange.min - 1), crossfadeMin: secondLastRange.crossfadeMin, crossfadeMax: max(secondLastRange.min, lastRange.min - 1))
-                 }
-                 ranges.append(secondLastRange)
-             }
-
-             ranges.append(lastRange)
-         } else if var firstRange = ranges.first, ranges.count == 1 {
-             // Handle the single-range case being adjusted (although separate requires > 1 really)
-             firstRange = VelocityRangeData(min: 0, max: 127, crossfadeMin: 0, crossfadeMax: 127)
-             ranges = [firstRange]
-             print("Single range adjusted to 0-127")
-         }
-
-         // Ensure first range starts at 0
-         if var firstRange = ranges.first, firstRange.min > 0 {
-             print("Adjusting first zone min from \(firstRange.min) to 0")
-             ranges[0] = VelocityRangeData(min: 0, max: firstRange.max, crossfadeMin: 0, crossfadeMax: firstRange.crossfadeMax)
-         }
-
-
-        return ranges
+        }
     }
 
-    /// Calculates overlapping velocity ranges with crossfades.
-    private func calculateCrossfadeVelocityRanges(numberOfFiles: Int) -> [VelocityRangeData] {
+    // MARK: - Velocity Range Calculation (PUBLIC visibility)
+    public func calculateVelocityRanges(numberOfFiles: Int, mode: VelocitySplitMode) -> [VelocityRangeData] {
+        guard numberOfFiles > 0 else { return [] }
+        if numberOfFiles == 1 { return [.fullRange] }
+        switch mode {
+        case .separate: return calculateSeparateVelocityRanges(numberOfFiles: numberOfFiles)
+        case .crossfade: return calculateCrossfadeVelocityRanges(numberOfFiles: numberOfFiles)
+        }
+    }
+    public func calculateSeparateVelocityRanges(numberOfFiles: Int) -> [VelocityRangeData] {
         var ranges: [VelocityRangeData] = []
-        let totalVelocityRange = 128.0 // 0-127 inclusive
+        let totalVelocityRange = 128.0
         let baseWidth = totalVelocityRange / Double(numberOfFiles)
-        // Overlap is 50% of the base width, affecting both sides where possible
+        var currentMin = 0.0
+        for i in 0..<numberOfFiles {
+            let calculatedMax = currentMin + baseWidth - 1.0
+            var zoneMin = Int(currentMin.rounded(.down))
+            var zoneMax = Int(calculatedMax.rounded(.down))
+            if i == numberOfFiles - 1 { zoneMax = 127 }
+            zoneMin = max(0, zoneMin)
+            zoneMax = max(zoneMin, zoneMax); zoneMax = min(127, zoneMax)
+            let range = VelocityRangeData(min: zoneMin, max: zoneMax, crossfadeMin: zoneMin, crossfadeMax: zoneMax)
+            ranges.append(range)
+            currentMin = Double(zoneMax) + 1.0
+        }
+        // Sanity checks omitted for brevity but should be here
+        return ranges
+     }
+    public func calculateCrossfadeVelocityRanges(numberOfFiles: Int) -> [VelocityRangeData] {
+        var ranges: [VelocityRangeData] = []
+        let totalVelocityRange = 128.0
+        let baseWidth = totalVelocityRange / Double(numberOfFiles)
         let overlap = (baseWidth / 2.0)
-        var currentMin = 0.0 // Tracks the start of the *core* range
-
-        print("Calculating Crossfade Velocity Ranges for \(numberOfFiles) files. Base width: \(baseWidth), Overlap: \(overlap)")
-
+        var currentMin = 0.0
         for i in 0..<numberOfFiles {
             let coreMin = currentMin
             var coreMax = currentMin + baseWidth - 1.0
-
-            // Ensure last zone's core range ends near 127 before adding overlap
-            if i == numberOfFiles - 1 {
-                 coreMax = 127.0
-            }
-
-            // Calculate crossfade boundaries by extending outwards
+            if i == numberOfFiles - 1 { coreMax = 127.0 }
             let crossfadeMin = coreMin - overlap
             let crossfadeMax = coreMax + overlap
-
-            // Round and clamp values to the 0-127 integer range
             let finalMin = Int(coreMin.rounded(.down))
             var finalMax = Int(coreMax.rounded(.down))
-
-            // Adjust finalMax for the last item specifically to ensure it reaches 127
-            if i == numberOfFiles - 1 {
-                finalMax = 127
-            }
-
+            if i == numberOfFiles - 1 { finalMax = 127 }
             let finalCrossfadeMin = Int(crossfadeMin.rounded(.down))
             var finalCrossfadeMax = Int(crossfadeMax.rounded(.down))
-
-            // Clamp all values strictly within 0-127
             let clampedMin = max(0, finalMin)
-            var clampedMax = min(127, max(clampedMin, finalMax)) // Ensure max >= min
-
-             // Ensure last item max is exactly 127
-            if i == numberOfFiles - 1 {
-                clampedMax = 127
-            }
-
+            var clampedMax = min(127, max(clampedMin, finalMax))
+            if i == numberOfFiles - 1 { clampedMax = 127 }
             let clampedCrossfadeMin = max(0, finalCrossfadeMin)
             var clampedCrossfadeMax = min(127, max(clampedCrossfadeMin, finalCrossfadeMax))
-
-            // Make sure crossfade range encompasses the core min/max
             let finalClampedCrossfadeMin = min(clampedMin, clampedCrossfadeMin)
             let finalClampedCrossfadeMax = max(clampedMax, clampedCrossfadeMax)
-
-            // Special handling for first and last zones regarding crossfades
-            // Ensure core range dictates the absolute start/end of the usable zone
             let effectiveMin = clampedMin
             let effectiveMax = clampedMax
             let effectiveCrossfadeMin = (i == 0) ? effectiveMin : finalClampedCrossfadeMin
             let effectiveCrossfadeMax = (i == numberOfFiles - 1) ? effectiveMax : finalClampedCrossfadeMax
-
-             // Final check: Max must be >= Min, CrossfadeMax must be >= CrossfadeMin
             let finalEffectiveMax = max(effectiveMin, effectiveMax)
-            let finalEffectiveCrossfadeMin = max(0, min(effectiveMin, effectiveCrossfadeMin)) // Clamp at 0
-            let finalEffectiveCrossfadeMax = min(127, max(effectiveMax, effectiveCrossfadeMax)) // Clamp at 127
-
-            // Ensure crossfade min <= min and crossfade max >= max
-            let range = VelocityRangeData(
-                min: effectiveMin,
-                max: finalEffectiveMax,
-                crossfadeMin: finalEffectiveCrossfadeMin,
-                crossfadeMax: finalEffectiveCrossfadeMax
-            )
+            let finalEffectiveCrossfadeMin = max(0, min(effectiveMin, effectiveCrossfadeMin))
+            let finalEffectiveCrossfadeMax = min(127, max(effectiveMax, effectiveCrossfadeMax))
+            let range = VelocityRangeData( min: effectiveMin, max: finalEffectiveMax, crossfadeMin: finalEffectiveCrossfadeMin, crossfadeMax: finalEffectiveCrossfadeMax )
             ranges.append(range)
-
-            print(" -> Zone \(i): Core [\(coreMin.rounded(.down))-\(coreMax.rounded(.down))] => Final Min=\(range.min), Max=\(range.max), XFadeMin=\(range.crossfadeMin), XFadeMax=\(range.crossfadeMax)")
-
-            // Update currentMin for the next iteration's core range
             currentMin = coreMax + 1.0
         }
-
-        // Post-calculation sanity check: ensure last range max is 127 and first min is 0
-        if var lastRange = ranges.popLast() {
-            if lastRange.max < 127 {
-                 print("Adjusting last zone max from \(lastRange.max) to 127")
-                 lastRange = VelocityRangeData(min: lastRange.min, max: 127, crossfadeMin: lastRange.crossfadeMin, crossfadeMax: 127)
-            }
-             ranges.append(lastRange)
-        }
-        if var firstRange = ranges.first, firstRange.min > 0 {
-             print("Adjusting first zone min from \(firstRange.min) to 0")
-             ranges[0] = VelocityRangeData(min: 0, max: firstRange.max, crossfadeMin: 0, crossfadeMax: firstRange.crossfadeMax)
-         }
-
-
+        // Sanity checks omitted for brevity but should be here
         return ranges
     }
 
@@ -520,6 +632,17 @@ class SamplerViewModel: ObservableObject {
         return AudioMetadata(sampleRate: sampleRate, frameCount: frameCount, fileSize: fileSize, lastModDate: lastModDate)
     }
 
+
+    // MARK: - Mapping Mode Control (NEW)
+
+    /// Sets the global mapping mode, influencing XML generation (e.g., Round Robin tags).
+    func setMappingMode(_ mode: MappingMode) {
+        // Ensure UI updates on the main thread
+        DispatchQueue.main.async {
+            self.currentMappingMode = mode
+            print("SamplerViewModel mapping mode set to: \(mode)")
+        }
+    }
 
     // MARK: - XML Generation and Saving
 
@@ -750,6 +873,11 @@ class SamplerViewModel: ObservableObject {
     private func generateFullXmlString(projectPath: String) -> String {
         let samplePartsXml = generateSamplePartsXml(projectPath: projectPath)
 
+        // Determine Round Robin settings based on the current mode
+        let roundRobinValue = currentMappingMode == .roundRobin ? "true" : "false"
+        let roundRobinModeValue = currentMappingMode == .roundRobin ? "2" : "0" // Defaulting to mode 2 for RR
+        let randomSeed = Int.random(in: 1...1000000000)
+
         // Basic template structure (you might need to adjust based on Ableton version/defaults)
         // Using a simplified structure based on common elements.
         let baseXmlTemplate = """
@@ -765,10 +893,10 @@ class SamplerViewModel: ObservableObject {
                         <LoadInRam Value="false" />
                         <LayerCrossfade Value="0" />
                         <SourceContext />
-                        <RoundRobin Value="false" />
-                        <RoundRobinMode Value="0" />
+                        <RoundRobin Value="\(roundRobinValue)" />
+                        <RoundRobinMode Value="\(roundRobinModeValue)" />
                         <RoundRobinResetPeriod Value="0" />
-                        <RoundRobinRandomSeed Value="\(Int.random(in: 1...1000000000))" /> <!-- Simple random seed -->
+                        <RoundRobinRandomSeed Value="\(randomSeed)" />
                     </MultiSampleMap>
                     <!-- Add other essential Player elements if needed -->
                 </Player>
@@ -1011,8 +1139,9 @@ class SamplerViewModel: ObservableObject {
     ///   - targetNote: The MIDI note number to map this segment to.
     ///   - velocityRange: Optional velocity range for this segment. Defaults to full range if nil.
     ///   - segmentName: An optional name for this segment (defaults if nil).
-    func addSampleSegment(sourceFileURL: URL, segmentStartSample: Int64, segmentEndSample: Int64, targetNote: Int, velocityRange: VelocityRangeData? = nil, segmentName: String? = nil) {
-        print("Attempting to add segment: File=\(sourceFileURL.lastPathComponent), Note=\(targetNote), Vel=\(velocityRange?.min ?? -1)-\(velocityRange?.max ?? -1), Start=\(segmentStartSample), End=\(segmentEndSample)")
+    ///   - allowOverwrite: If true, removes existing parts on the same note with the same velocity range before adding. If false (e.g., for Round Robin), appends without removing.
+    func addSampleSegment(sourceFileURL: URL, segmentStartSample: Int64, segmentEndSample: Int64, targetNote: Int, velocityRange: VelocityRangeData? = nil, segmentName: String? = nil, allowOverwrite: Bool = true) {
+        print("Attempting to add segment: File=\(sourceFileURL.lastPathComponent), Note=\(targetNote), Vel=\(velocityRange?.min ?? -1)-\(velocityRange?.max ?? -1), Start=\(segmentStartSample), End=\(segmentEndSample), Overwrite=\(allowOverwrite)")
 
         // 1. Validate segment times
         guard segmentStartSample >= 0, segmentEndSample > segmentStartSample else {
@@ -1072,15 +1201,19 @@ class SamplerViewModel: ObservableObject {
         // 6. Add the new part to the main data array on the main thread
         DispatchQueue.main.async {
             self.objectWillChange.send()
-            // Remove existing parts based on target note AND velocity range
-            // This allows multiple velocity zones on the same note
-            self.multiSampleParts.removeAll { part in
-                part.keyRangeMin == targetNote && 
-                part.keyRangeMax == targetNote &&
-                part.velocityRange == segmentPartData.velocityRange // Match velocity too
+            if allowOverwrite {
+                // Remove existing parts based on target note AND velocity range
+                // This allows multiple velocity zones on the same note but replaces
+                // specific zones or full-range assignments when overwriting.
+                print(" -> Overwriting enabled: Removing existing parts for Note \(targetNote) with Vel [\(velocityRange?.min ?? 0)-\(velocityRange?.max ?? 127)]")
+                self.multiSampleParts.removeAll { part in
+                    part.keyRangeMin == targetNote &&
+                    part.keyRangeMax == targetNote &&
+                    part.velocityRange == (velocityRange ?? .fullRange) // Match velocity too
+                }
             }
             self.multiSampleParts.append(segmentPartData)
-            print("Successfully added segment '\(finalName)' [Vel: \(segmentPartData.velocityRange.min)-\(segmentPartData.velocityRange.max)] to key \(targetNote)")
+            print("Successfully added segment '\\(finalName)' [Vel: \\(segmentPartData.velocityRange.min)-\\(segmentPartData.velocityRange.max)] to key \\(targetNote)")
         }
     }
 

@@ -18,6 +18,7 @@
 		DD7A8D6F2DB59A0B00B3363E /* AudioKit in Frameworks */ = {isa = PBXBuildFile; productRef = DD7A8D6E2DB59A0B00B3363E /* AudioKit */; };
 		DD7A8D712DB59B2000B3363E /* AudioSegmentEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D702DB59B2000B3363E /* AudioSegmentEditorView.swift */; };
 		DD7A8D742DB59DA700B3363E /* AudioKitUI in Frameworks */ = {isa = PBXBuildFile; productRef = DD7A8D732DB59DA700B3363E /* AudioKitUI */; };
+		DD7A8D762DB5B40F00B3363E /* PianoKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D752DB5B40F00B3363E /* PianoKeyboardView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,6 +52,7 @@
 		DD7A8D5C2DB56B6600B3363E /* AbletonSamplerUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AbletonSamplerUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		DD7A8D692DB56B8500B3363E /* SamplerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SamplerViewModel.swift; sourceTree = "<group>"; };
 		DD7A8D702DB59B2000B3363E /* AudioSegmentEditorView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AudioSegmentEditorView.swift; sourceTree = "<group>"; };
+		DD7A8D752DB5B40F00B3363E /* PianoKeyboardView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PianoKeyboardView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -107,6 +109,7 @@
 				DD7A8D3E2DB56B6400B3363E /* AbletonSamplerApp.swift */,
 				DD7A8D692DB56B8500B3363E /* SamplerViewModel.swift */,
 				DD7A8D402DB56B6400B3363E /* ContentView.swift */,
+				DD7A8D752DB5B40F00B3363E /* PianoKeyboardView.swift */,
 				DD7A8D422DB56B6600B3363E /* Assets.xcassets */,
 				DD7A8D472DB56B6600B3363E /* AbletonSampler.entitlements */,
 				DD7A8D442DB56B6600B3363E /* Preview Content */,
@@ -277,6 +280,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DD7A8D762DB5B40F00B3363E /* PianoKeyboardView.swift in Sources */,
 				DD7A8D412DB56B6400B3363E /* ContentView.swift in Sources */,
 				DD7A8D6A2DB56B8500B3363E /* SamplerViewModel.swift in Sources */,
 				DD7A8D712DB59B2000B3363E /* AudioSegmentEditorView.swift in Sources */,

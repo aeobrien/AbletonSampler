@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import AudioKit // Import the main AudioKit framework
 import AudioKitUI // Import the UI components
+// import AbletonSampler // Explicitly import the module if needed
 
 // Placeholder for the waveform view component
 struct WaveformView: View {
@@ -59,17 +60,27 @@ struct AudioSegmentEditorView: View {
     @State private var selectedSegmentIndex: Int? = nil
 
     // --- State for Mapping ---
-    @State private var targetMidiNote: Int = 0
-    let availableMidiNotes = 0..<12
+    @State private var targetMidiNote: Int = 60 // Default to C4 (MIDI 60)
+
+    // --- Computed property for the full MIDI range (0-127) --- 
+    private var availablePianoKeys: [PianoKey] {
+        // Assuming viewModel.pianoKeys now holds the full 0-127 range.
+        return viewModel.pianoKeys
+    }
+    private var availableMidiNoteRange: Range<Int> {
+        // Full MIDI range
+        return 0..<128 // Use 128 for exclusive upper bound (0...127)
+    }
 
     // --- NEW: State for Dragging Markers ---
     @State private var draggedMarkerIndex: Int? = nil
     // Use GestureState for smooth updates during drag without complex state management
     @GestureState private var dragOffset: CGSize = .zero
 
-    // --- NEW: Auto-Mapping State ---
-    @State private var autoMapStartNote: Int = 0 // Starting note for note mapping
-    @State private var velocityMapTargetNote: Int = 0 // Target note for velocity mapping
+    // --- NEW: Auto-Mapping State (Updated Defaults) --- 
+    @State private var autoMapStartNote: Int = 24 // Default to C0 (MIDI 24)
+    @State private var velocityMapTargetNote: Int = 60 // Default to C4 (MIDI 60)
+    @State private var roundRobinTargetNote: Int = 60 // Default to C4 (MIDI 60)
 
     // --- NEW: Transient Detection State ---
     @State private var transientThreshold: Double = 0.1 // Default sensitivity (0.0 to 1.0)
@@ -209,13 +220,15 @@ struct AudioSegmentEditorView: View {
              if let segmentIndex = selectedSegmentIndex {
                  HStack {
                      Text("Map Segment \(segmentIndex + 1) to:")
-                     Picker("Target MIDI Note", selection: $targetMidiNote) { // Bind to state variable
-                         ForEach(availableMidiNotes, id: \.self) { note in
-                             Text(KeyZoneView.midiNoteNameStatic(for: note)).tag(note)
+                     // --- UPDATED Picker --- 
+                     Picker("Target MIDI Note", selection: $targetMidiNote) {
+                         ForEach(availablePianoKeys) { key in // Iterate over PianoKey structs
+                             Text("\(key.name) (\(key.id))").tag(key.id) // Use key name and ID
                          }
                      }
                      .pickerStyle(.menu)
-                     .labelsHidden() // Hide the picker label itself
+                     .frame(minWidth: 100) // Give picker some width
+                     .labelsHidden()
 
                      Spacer()
 
@@ -242,14 +255,16 @@ struct AudioSegmentEditorView: View {
                     Button("Map Segments to Notes Starting From:") {
                         autoMapSegmentsToNotes(startNote: autoMapStartNote)
                     }
-                    .disabled(numberOfSegments == 0)
+                    .disabled(markers.isEmpty)
 
+                    // --- UPDATED Picker --- 
                     Picker("Start Note", selection: $autoMapStartNote) {
-                        ForEach(availableMidiNotes, id: \.self) { note in
-                            Text(KeyZoneView.midiNoteNameStatic(for: note)).tag(note)
+                        ForEach(availablePianoKeys) { key in // Iterate over PianoKey structs
+                            Text("\(key.name) (\(key.id))").tag(key.id) // Use key name and ID
                         }
                     }
                     .labelsHidden()
+                    .frame(minWidth: 100)
                 }
 
                 // Map to Velocity Zones
@@ -257,14 +272,33 @@ struct AudioSegmentEditorView: View {
                     Button("Map Segments to Velocity Zones on Note:") {
                         autoMapSegmentsToVelocity(targetNote: velocityMapTargetNote)
                     }
-                    .disabled(numberOfSegments == 0)
+                    .disabled(markers.isEmpty)
 
+                    // --- UPDATED Picker --- 
                     Picker("Target Note", selection: $velocityMapTargetNote) {
-                        ForEach(availableMidiNotes, id: \.self) { note in
-                            Text(KeyZoneView.midiNoteNameStatic(for: note)).tag(note)
+                         ForEach(availablePianoKeys) { key in // Iterate over PianoKey structs
+                            Text("\(key.name) (\(key.id))").tag(key.id) // Use key name and ID
                         }
                     }
                     .labelsHidden()
+                    .frame(minWidth: 100)
+                }
+
+                // NEW: Map to Round Robin
+                HStack {
+                    Button("Map Segments to Round Robin on Note:") {
+                        autoMapSegmentsToRoundRobin(targetNote: roundRobinTargetNote)
+                    }
+                    .disabled(markers.isEmpty)
+
+                    // --- UPDATED Picker --- 
+                    Picker("Target Note", selection: $roundRobinTargetNote) {
+                        ForEach(availablePianoKeys) { key in // Iterate over PianoKey structs
+                            Text("\(key.name) (\(key.id))").tag(key.id) // Use key name and ID
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(minWidth: 100)
                 }
             }
             // -----------------------------
@@ -284,8 +318,11 @@ struct AudioSegmentEditorView: View {
             }
         }
         .padding()
-        .frame(minWidth: 550, minHeight: 550) // Increased height for new controls
-        .task(loadAudioAndWaveform) // Use .task for async work tied to view lifetime
+        .frame(minWidth: 550, minHeight: 580)
+        .task {
+            // Directly call the async function
+            await loadAudioAndWaveform()
+        }
     }
 
     // --- Helper Functions ---
@@ -503,46 +540,29 @@ struct AudioSegmentEditorView: View {
     // --- End Transient Detection Logic ---
 
     private func assignSegmentToNote(segmentIndex: Int) {
-        guard let frames = totalFrames, frames > 0 else {
-            print("Cannot assign segment: Total frames not available or zero.")
-            viewModel.showError("Audio file information not fully loaded.")
+        guard let frames = totalFrames, let _ = audioFile else {
+            viewModel.showError("Audio file not loaded or frame count missing.")
             return
         }
-        guard segmentIndex >= 0 && segmentIndex < numberOfSegments else {
-            print("Invalid segment index: \(segmentIndex) for \(numberOfSegments) segments")
-            return
+        guard availableMidiNoteRange.contains(targetMidiNote) else {
+             viewModel.showError("Selected target note \(targetMidiNote) is outside the valid range (\(availableMidiNoteRange.lowerBound)-\(availableMidiNoteRange.upperBound - 1)).")
+             return
         }
-
-        // Determine start and end markers for the segment
-        let startMarkerValue = (segmentIndex == 0) ? 0.0 : markers[segmentIndex - 1]
-        let endMarkerValue = (segmentIndex == markers.count) ? 1.0 : markers[segmentIndex]
-
-        // Convert normalized marker values to sample frames
-        let startSample = Int64(startMarkerValue * Double(frames))
-        let endSample = Int64(endMarkerValue * Double(frames))
-
-        // Ensure startSample is strictly less than endSample
-        guard startSample < endSample else {
-            print("Cannot assign segment: Start sample (\(startSample)) is not less than end sample (\(endSample)).")
-            viewModel.showError("Selected segment has zero length.")
-            return
-        }
-
-        // Call the ViewModel function
-        print("Assigning Segment \(segmentIndex + 1) [Samples: \(startSample) - \(endSample)] to Note \(targetMidiNote)")
+        guard let (startFrame, endFrame) = calculateSegmentFrames(segmentIndex: segmentIndex, totalFrames: frames) else {
+             viewModel.showError("Could not calculate valid frames for segment \(segmentIndex + 1).")
+             return
+         }
+        
+        let segmentName = "\(audioFileURL.deletingPathExtension().lastPathComponent)_seg\(segmentIndex + 1)"
+        print("Assigning segment \(segmentIndex + 1) [\(startFrame)-\(endFrame)] to note \(targetMidiNote)")
         viewModel.addSampleSegment(
             sourceFileURL: audioFileURL,
-            segmentStartSample: startSample,
-            segmentEndSample: endSample,
-            targetNote: targetMidiNote
-            // segmentName could be customized here if needed
+            segmentStartSample: startFrame,
+            segmentEndSample: endFrame,
+            targetNote: targetMidiNote,
+            segmentName: segmentName,
+            allowOverwrite: true
         )
-
-        // Optional: Give feedback to the user
-        // e.g., show a temporary confirmation message
-
-        // Deselect segment after assigning (optional)
-        // selectedSegmentIndex = nil
     }
 
     // --- NEW: Auto-Mapping Functions ---
@@ -550,179 +570,175 @@ struct AudioSegmentEditorView: View {
     /// Maps each segment defined by markers to a consecutive MIDI note, starting from `startNote`.
     /// Skips the implicit segment from 0.0 to the first marker unless a marker exists near 0.0.
     private func autoMapSegmentsToNotes(startNote: Int) {
-        guard let frames = totalFrames, frames > 0 else {
-            viewModel.showError("Audio file not fully loaded for auto-mapping.")
+        guard let frames = totalFrames, let _ = audioFile, !markers.isEmpty else {
+            viewModel.showError("Audio not loaded or no markers defined for auto-mapping.")
             return
         }
-        // Require at least one marker to define any segments
-        guard !markers.isEmpty else {
-             viewModel.showError("No markers defined to create segments.")
-             return
-        }
+        let segmentCount = numberOfSegments
+        var currentNote = startNote
+        print("Auto-mapping \(segmentCount) segments to notes starting from \(startNote)")
 
-        // Determine if the first marker is effectively at the start
-        let tolerance = 0.001 // How close to 0.0 is considered the start
-        let includeFirstImplicitSegment = markers[0] < tolerance
-
-        // Calculate the number of segments to map based on markers
-        let numberOfMappableSegments = includeFirstImplicitSegment ? markers.count + 1 : markers.count
-
-        // Calculate the starting index for the loop
-        let loopStartIndex = includeFirstImplicitSegment ? 0 : 1
-        // Calculate the index offset for accessing the markers array
-        let markerIndexOffset = includeFirstImplicitSegment ? 1 : 0
-
-        print("Auto-mapping \(numberOfMappableSegments) segments to notes starting from \(startNote)...")
-        print(includeFirstImplicitSegment ? "Including implicit segment from start." : "Skipping implicit segment from start.")
-
-        for segmentLoopIndex in loopStartIndex..<(markers.count + 1) {
-            // Calculate the effective segment index relative to the potential full list of segments (including implicit first)
-            let effectiveSegmentIndex = segmentLoopIndex
-            // Calculate the target MIDI note, adjusted by how many segments we actually map
-            let noteOffset = segmentLoopIndex - loopStartIndex
-            let targetNote = startNote + noteOffset
-
-            // Clamp target note
-            let clampedTargetNote = max(0, min(127, targetNote)) // Use 0-127 range
-            if targetNote != clampedTargetNote {
-                print("Warning: Target note \(targetNote) clamped to \(clampedTargetNote).")
-            }
-
-            // Determine start and end markers based on the effective segment index
-            let startMarkerValue = (effectiveSegmentIndex == 0) ? 0.0 : markers[effectiveSegmentIndex - 1]
-            let endMarkerValue = (effectiveSegmentIndex == markers.count) ? 1.0 : markers[effectiveSegmentIndex]
-
-            let startSample = Int64(startMarkerValue * Double(frames))
-            let endSample = Int64(endMarkerValue * Double(frames))
-
-            guard startSample < endSample else {
-                print("Skipping zero-length segment \(effectiveSegmentIndex + 1) for note mapping.")
-                continue // Skip empty segments
-            }
-
-            print(" -> Mapping Segment \(effectiveSegmentIndex + 1) [\(startSample)-\(endSample)] to Note \(clampedTargetNote)")
-            viewModel.addSampleSegment(
-                sourceFileURL: audioFileURL,
-                segmentStartSample: startSample,
-                segmentEndSample: endSample,
-                targetNote: clampedTargetNote
-            )
-        }
-        print("Finished auto-mapping to notes.")
-    }
+        for i in 0..<segmentCount {
+             guard availableMidiNoteRange.contains(currentNote) else {
+                 viewModel.showError("Auto-mapping stopped: Reached end of available note range (\(availableMidiNoteRange.lowerBound)-\(availableMidiNoteRange.upperBound - 1)) at segment \(i + 1).")
+                 print("Auto-mapping stopped: Note \(currentNote) is outside range \(availableMidiNoteRange)")
+                 break // Stop mapping if we run out of keys
+             }
+             guard let (startFrame, endFrame) = calculateSegmentFrames(segmentIndex: i, totalFrames: frames) else {
+                 print("Skipping segment \(i + 1) due to invalid range or zero length.")
+                 continue // Skip this segment
+             }
+             
+             let segmentName = "\(audioFileURL.deletingPathExtension().lastPathComponent)_noteMap_\(i + 1)"
+             print("  -> Mapping segment \(i + 1) [\(startFrame)-\(endFrame)] to note \(currentNote)")
+             viewModel.addSampleSegment(
+                 sourceFileURL: audioFileURL,
+                 segmentStartSample: startFrame,
+                 segmentEndSample: endFrame,
+                 targetNote: currentNote,
+                 segmentName: segmentName,
+                 allowOverwrite: true
+             )
+             currentNote += 1
+         }
+          print("Finished auto-mapping segments to notes.")
+          viewModel.setMappingMode(.standard)
+     }
 
     /// Maps segments defined by markers to a single `targetNote` with distributed velocity zones.
     /// Skips the implicit segment from 0.0 to the first marker unless a marker exists near 0.0.
     private func autoMapSegmentsToVelocity(targetNote: Int) {
-        guard let frames = totalFrames, frames > 0 else {
-            viewModel.showError("Audio file not fully loaded for auto-mapping.")
+        guard let frames = totalFrames, let _ = audioFile, !markers.isEmpty else {
+            viewModel.showError("Audio not loaded or no markers defined for auto-mapping.")
             return
         }
-        // Require at least one marker
-        guard !markers.isEmpty else {
-            viewModel.showError("No markers defined to create segments.")
-            return
-        }
+         guard availableMidiNoteRange.contains(targetNote) else {
+             viewModel.showError("Selected target note \(targetNote) for velocity mapping is outside the valid range (\(availableMidiNoteRange.lowerBound)-\(availableMidiNoteRange.upperBound - 1)).")
+             return
+         }
 
-        // Determine if the first marker is effectively at the start
-        let tolerance = 0.001
-        let includeFirstImplicitSegment = markers[0] < tolerance
+        let segmentCount = numberOfSegments
+        let velocityRanges = viewModel.calculateSeparateVelocityRanges(numberOfFiles: segmentCount)
+        guard velocityRanges.count == segmentCount else {
+             viewModel.showError("Internal error: Could not calculate velocity ranges for \(segmentCount) segments.")
+             print("Error: Mismatch between segment count (\(segmentCount)) and velocity ranges (\(velocityRanges.count))")
+             return
+         }
+        print("Auto-mapping \(segmentCount) segments to velocity zones on note \(targetNote)")
 
-        // Calculate the number of segments to map
-        let numberOfMappableSegments = includeFirstImplicitSegment ? markers.count + 1 : markers.count
-        // Calculate the starting index for the loop
-        let loopStartIndex = includeFirstImplicitSegment ? 0 : 1
+         print(" -> Clearing existing samples on note \(targetNote) before velocity mapping.")
+         DispatchQueue.main.async {
+              self.viewModel.objectWillChange.send()
+              self.viewModel.multiSampleParts.removeAll { $0.keyRangeMin == targetNote }
+              print("Cleared note \(targetNote).")
+              self.addVelocityMappedSegments(targetNote: targetNote, frames: frames, velocityRanges: velocityRanges, segmentCount: segmentCount, overwrite: false)
+         }
+    }
 
-        print("Auto-mapping \(numberOfMappableSegments) segments to velocity zones on note \(targetNote)...")
-        print(includeFirstImplicitSegment ? "Including implicit segment from start." : "Skipping implicit segment from start.")
-
-        // --- Calculate Velocity Ranges for the *mappable* segments --- 
-        var velocityRanges: [VelocityRangeData] = []
-        if numberOfMappableSegments == 1 {
-            // If only one segment is being mapped (either explicit or implicit-included)
-            velocityRanges = [.fullRange]
-        } else if numberOfMappableSegments > 1 {
-            let totalVelocityRange = 128.0
-            let baseWidth = totalVelocityRange / Double(numberOfMappableSegments)
-            var currentMin = 0.0
-            for i in 0..<numberOfMappableSegments { // Iterate for the actual number of segments being mapped
-                let calculatedMax = currentMin + baseWidth - 1.0
-                var zoneMin = Int(currentMin.rounded(.down))
-                var zoneMax = Int(calculatedMax.rounded(.down))
-                // Ensure the very last zone reaches 127
-                if i == numberOfMappableSegments - 1 { zoneMax = 127 }
-                zoneMin = max(0, zoneMin)
-                zoneMax = max(zoneMin, zoneMax) // Ensure max >= min
-                zoneMax = min(127, zoneMax)
-                let range = VelocityRangeData(min: zoneMin, max: zoneMax, crossfadeMin: zoneMin, crossfadeMax: zoneMax)
-                velocityRanges.append(range)
-                currentMin = Double(zoneMax) + 1.0
-            }
-            // Refined adjustment for last range edge case
-            if velocityRanges.count > 1 { // Need at least 2 ranges for this adjustment
-                if var lastRange = velocityRanges.popLast() { // Use optional binding
-                    if lastRange.max < 127 {
-                        lastRange = VelocityRangeData(min: lastRange.min, max: 127, crossfadeMin: lastRange.crossfadeMin, crossfadeMax: 127)
-                        if var secondLastRange = velocityRanges.popLast() { // Check again
-                             // Adjust the second-to-last range to end just before the last one starts
-                            let newSecondLastMax = max(secondLastRange.min, lastRange.min - 1)
-                            secondLastRange = VelocityRangeData(min: secondLastRange.min, max: newSecondLastMax, crossfadeMin: secondLastRange.crossfadeMin, crossfadeMax: newSecondLastMax)
-                            velocityRanges.append(secondLastRange)
-                        } else {
-                            // If there was only one range before, adjust its max (shouldn't happen if count > 1)
-                            lastRange = VelocityRangeData(min: 0, max: 127, crossfadeMin: 0, crossfadeMax: 127)
-                        }
-                    }
-                     velocityRanges.append(lastRange)
-                }
-            }
-        }
-
-        guard velocityRanges.count == numberOfMappableSegments else {
-            print("Error: Velocity range calculation mismatch. Expected \(numberOfMappableSegments), got \(velocityRanges.count)")
-            viewModel.showError("Internal error calculating velocity ranges.")
-            return
-        }
-        // --- End Velocity Calculation ---
-
-        // Collect segment data first before calling ViewModel
-        var segmentInfos: [(start: Int64, end: Int64, velocity: VelocityRangeData)] = []
-
-        for segmentLoopIndex in loopStartIndex..<(markers.count + 1) {
-            // Calculate the effective segment index relative to the potential full list
-            let effectiveSegmentIndex = segmentLoopIndex
-            // Calculate the index for the velocity range array (0-based for mapped segments)
-            let velocityRangeIndex = segmentLoopIndex - loopStartIndex
-
-            // Get segment boundaries
-            let startMarkerValue = (effectiveSegmentIndex == 0) ? 0.0 : markers[effectiveSegmentIndex - 1]
-            let endMarkerValue = (effectiveSegmentIndex == markers.count) ? 1.0 : markers[effectiveSegmentIndex]
-            let startSample = Int64(startMarkerValue * Double(frames))
-            let endSample = Int64(endMarkerValue * Double(frames))
-
-            if startSample < endSample {
-                 let velocityRange = velocityRanges[velocityRangeIndex]
-                 segmentInfos.append((start: startSample, end: endSample, velocity: velocityRange))
-                 print(" -> Preparing Segment \(effectiveSegmentIndex + 1) [\(startSample)-\(endSample)] for Vel [\(velocityRange.min)-\(velocityRange.max)]")
-            } else {
-                 print("Skipping zero-length segment \(effectiveSegmentIndex + 1) for velocity mapping.")
-            }
-        }
-
-        // Call ViewModel function for each prepared segment info
-        print("Submitting \(segmentInfos.count) segments to ViewModel for note \(targetNote)...")
-        for info in segmentInfos {
+    @MainActor
+    private func addVelocityMappedSegments(targetNote: Int, frames: Int64, velocityRanges: [VelocityRangeData], segmentCount: Int, overwrite: Bool) {
+         for i in 0..<segmentCount {
+             guard let (startFrame, endFrame) = calculateSegmentFrames(segmentIndex: i, totalFrames: frames) else {
+                 print("Skipping segment \(i + 1) due to invalid range or zero length.")
+                 continue
+             }
+             let velocityRange = velocityRanges[i]
+             let segmentName = "\(audioFileURL.deletingPathExtension().lastPathComponent)_velMap_\(i + 1)_v\(velocityRange.min)-\(velocityRange.max)"
+             print("  -> Mapping segment \(i + 1) [\(startFrame)-\(endFrame)] to note \(targetNote) [Vel: \(velocityRange.min)-\(velocityRange.max)]")
              viewModel.addSampleSegment(
                  sourceFileURL: audioFileURL,
-                 segmentStartSample: info.start,
-                 segmentEndSample: info.end,
+                 segmentStartSample: startFrame,
+                 segmentEndSample: endFrame,
                  targetNote: targetNote,
-                 velocityRange: info.velocity // Pass the specific range
+                 velocityRange: velocityRange,
+                 segmentName: segmentName,
+                 allowOverwrite: overwrite
              )
+         }
+         print("Finished auto-mapping segments to velocity zones.")
+         viewModel.setMappingMode(.standard)
+    }
+
+    // --- NEW: Auto-Map to Round Robin ---
+    private func autoMapSegmentsToRoundRobin(targetNote: Int) {
+        guard let frames = totalFrames, let _ = audioFile, !markers.isEmpty else {
+            viewModel.showError("Audio not loaded or no markers defined for auto-mapping to Round Robin.")
+            return
+        }
+         guard availableMidiNoteRange.contains(targetNote) else {
+             viewModel.showError("Selected target note \(targetNote) for Round Robin mapping is outside the valid range (\(availableMidiNoteRange.lowerBound)-\(availableMidiNoteRange.upperBound - 1)).")
+             return
+         }
+
+        let segmentCount = numberOfSegments
+        print("Auto-mapping \(segmentCount) segments to Round Robin on note \(targetNote)")
+
+        print(" -> Clearing existing samples on note \(targetNote) before Round Robin mapping.")
+        DispatchQueue.main.async { 
+             self.viewModel.objectWillChange.send()
+             self.viewModel.multiSampleParts.removeAll { $0.keyRangeMin == targetNote }
+             print("Cleared note \(targetNote).")
+              self.addRoundRobinMappedSegments(targetNote: targetNote, frames: frames, segmentCount: segmentCount, overwrite: false)
+        }
+    }
+
+    @MainActor
+    private func addRoundRobinMappedSegments(targetNote: Int, frames: Int64, segmentCount: Int, overwrite: Bool) {
+        for i in 0..<segmentCount {
+             guard let (startFrame, endFrame) = calculateSegmentFrames(segmentIndex: i, totalFrames: frames) else {
+                print("Skipping segment \(i + 1) due to invalid range or zero length.")
+                continue
+             }
+            let segmentName = "\(audioFileURL.deletingPathExtension().lastPathComponent)_RR_\(i + 1)"
+            print("  -> Mapping segment \(i + 1) [\(startFrame)-\(endFrame)] to note \(targetNote) as Round Robin part")
+            viewModel.addSampleSegment(
+                sourceFileURL: audioFileURL,
+                segmentStartSample: startFrame,
+                segmentEndSample: endFrame,
+                targetNote: targetNote,
+                segmentName: segmentName,
+                allowOverwrite: overwrite
+            )
+        }
+        viewModel.setMappingMode(.roundRobin)
+        print("Finished auto-mapping segments to Round Robin. Set mapping mode.")
+    }
+
+    // --- ADDED: calculateSegmentFrames --- 
+    /// Calculates the start and end sample frames for a given segment index.
+    /// - Parameters:
+    ///   - segmentIndex: The 0-based index of the segment.
+    ///   - totalFrames: The total number of frames in the audio file.
+    /// - Returns: A tuple containing the start frame and end frame (exclusive), or nil if invalid.
+    private func calculateSegmentFrames(segmentIndex: Int, totalFrames: Int64) -> (startFrame: Int64, endFrame: Int64)? {
+        guard segmentIndex >= 0, segmentIndex < numberOfSegments else {
+            print("Error: Invalid segment index \(segmentIndex) for \(numberOfSegments) segments.")
+            return nil
+        }
+        guard totalFrames > 0 else {
+             print("Error: Cannot calculate frames with totalFrames = \(totalFrames).")
+             return nil
+         }
+
+        // Determine start and end markers based on the segment index and sorted markers array
+        // Markers are stored as normalized values (0.0 to 1.0)
+        let startMarkerValue: Double = (segmentIndex == 0) ? 0.0 : markers[segmentIndex - 1]
+        let endMarkerValue: Double = (segmentIndex >= markers.count) ? 1.0 : markers[segmentIndex]
+
+        // Convert normalized marker values to absolute sample frames
+        let startFrame = Int64(startMarkerValue * Double(totalFrames))
+        let endFrame = Int64(endMarkerValue * Double(totalFrames))
+
+        // Ensure startFrame is strictly less than endFrame and endFrame doesn't exceed totalFrames
+        let clampedEndFrame = min(endFrame, totalFrames)
+        guard startFrame < clampedEndFrame else {
+            print("Warning: Calculated segment \(segmentIndex + 1) has zero or negative length [\(startFrame)-\(clampedEndFrame)]. Skipping.")
+            return nil // Return nil for zero-length segments
         }
 
-        print("Finished auto-mapping to velocity zones.")
+        return (startFrame: startFrame, endFrame: clampedEndFrame)
     }
+    // -----------------------------------
 }
 
 // --- Preview ---
