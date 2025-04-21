@@ -1,12 +1,18 @@
-// File: HabitStacker/HabitStackerApp.swift
+// File: AbletonSampler/AbletonSampler/AbletonSamplerApp.swift
 import SwiftUI
 
 @main
-struct HabitStackerApp: App {
+struct AbletonSamplerApp: App {
+    // --- Create managers using @StateObject --- 
+    @StateObject private var viewModel = SamplerViewModel()
+    @StateObject private var midiManager = MIDIManager()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environmentObject(SamplerViewModel()) // Provide the view model to the environment
+                // --- Inject BOTH into the environment --- 
+                .environmentObject(viewModel) 
+                .environmentObject(midiManager)
         }
     }
 }
