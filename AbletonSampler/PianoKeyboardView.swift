@@ -11,30 +11,54 @@ struct PianoKeyboardView: View {
     let viewHeight: CGFloat = 150
 
     var body: some View {
+        // Removed Debug Print for first key offset
+        // let _ = print("DEBUG: First key (\(keys.first?.name ?? "N/A")) xOffset: \(keys.first?.xOffset ?? -1)")
+
         ScrollView(.horizontal, showsIndicators: true) {
             let whiteKeys = keys.filter { $0.isWhite }
-            let totalWidth = whiteKeys.reduce(0) { $0 + $1.width }
+            // Calculate total width based on white keys for the ZStack frame
+            let totalWidth = whiteKeys.reduce(0) { $0 + ($1.width ?? 0) }
+            // Removed Debug Print for total width
+            // let _ = print("DEBUG: Calculated totalWidth (sum of white keys): \(totalWidth)")
 
-            ZStack(alignment: .topLeading) {
-                // --- White Keys --- 
-                ForEach(keys.filter { $0.isWhite }) { key in
-                     KeyView(key: key)
-                         .offset(x: key.xOffset)
-                         .environmentObject(viewModel)
-                 }
-                 // --- Black Keys --- 
-                 ForEach(keys.filter { !$0.isWhite }) { key in
-                     KeyView(key: key)
-                         .offset(x: key.xOffset, y: 0)
-                         .zIndex(key.zIndex)
-                         .environmentObject(viewModel)
-                 }
+            // Use ZStack to allow overlaying black keys
+            ZStack(alignment: .topLeading) { // Red Border applied below
+
+                // --- White Keys in an HStack ---
+                // The HStack arranges white keys horizontally with no space between them.
+                HStack(spacing: 0) {
+                    ForEach(keys.filter { $0.isWhite }) { key in
+                        KeyView(key: key)
+                            // NO .offset needed; HStack handles sequential layout.
+                            .environmentObject(viewModel)
+                            // Removed purple debug border
+                            // .border(key.id == keys.first(where: { $0.isWhite })?.id ? Color.purple : Color.clear, width: 2)
+                    }
+                }
+                // The HStack implicitly determines its width based on children.
+                // Important: The HStack itself is aligned to the topLeading of the ZStack.
+
+                // --- Black Keys (Positioned absolutely within ZStack) ---
+                // These are placed relative to the ZStack's origin, overlaying the HStack.
+                ForEach(keys.filter { !$0.isWhite }) { key in
+                    KeyView(key: key)
+                        // Black keys still need absolute offset from the ZStack's topLeading corner.
+                        .offset(x: key.xOffset ?? 0, y: 0)
+                        .zIndex(1) // Ensure black keys render on top.
+                        .environmentObject(viewModel)
+                }
             }
+            // The ZStack needs the frame to define the ScrollView's content size.
+            // Using totalWidth ensures the ScrollView knows how far it can scroll.
             .frame(width: max(totalWidth, 10), height: viewHeight)
-            // --- Remove Alignment Frame --- 
-            // .frame(maxWidth: .infinity, alignment: .leading) // Removed
-        }
-        .frame(height: viewHeight + 30)
+            // Removed red debug border for ZStack
+            // .border(Color.red, width: 2)
+
+        } // End ScrollView
+        .frame(height: viewHeight + 30) // Set height for the whole ScrollView component.
+        // Removed green debug border for ScrollView
+        // .border(Color.green, width: 2)
+        // Added original gray border back
         .border(Color.gray)
     }
 }

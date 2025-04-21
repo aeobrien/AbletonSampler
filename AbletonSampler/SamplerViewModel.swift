@@ -13,11 +13,12 @@ struct PianoKey: Identifiable {
     let name: String // e.g., "C4", "F#3", "A0"
     var hasSample: Bool // Indicates if a sample is mapped to this key
 
-    // Geometry can stay here or move to the View if purely visual
-    var width: CGFloat { isWhite ? 30 : 18 }
-    var height: CGFloat { isWhite ? 120 : 80 }
+    // --- Geometry Properties - Now Mutable Vars ---
+    // These will be assigned values during the generation process.
+    var width: CGFloat = 0   // Default value, will be set by generatePianoKeys
+    var height: CGFloat = 0  // Default value, will be set by generatePianoKeys
     var xOffset: CGFloat = 0 // Calculated once for layout
-    var zIndex: Double { isWhite ? 0 : 1 } // Black keys on top
+    var zIndex: Double = 0   // Default value, will be set by generatePianoKeys (0 for white, 1 for black)
 }
 
 // Generates the 128 keys for the full MIDI range (Moved OUTSIDE ViewModel class)
@@ -25,11 +26,12 @@ func generatePianoKeys() -> [PianoKey] {
     var keys: [PianoKey] = []
     let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
-    // Full MIDI Range (0-127) -> C-2 to G8
     let whiteKeyWidth: CGFloat = 30
     let blackKeyWidth: CGFloat = 18
+    let whiteKeyHeight: CGFloat = 150
+    let blackKeyHeight: CGFloat = whiteKeyHeight * 0.6
 
-    // --- Generate Key Data ---
+    // Generate Key Data
     for midiNote in 0...127 {
         let keyIndexInOctave = midiNote % 12
         let noteName = noteNames[keyIndexInOctave]
@@ -39,36 +41,33 @@ func generatePianoKeys() -> [PianoKey] {
             case 1, 3, 6, 8, 10: isWhite = false
             default: isWhite = true
         }
-        let keyName = "\\(noteName)\\(actualOctave)"
-        // print("Generated Key: MIDI=\(midiNote), Name=\(keyName), isWhite=\(isWhite)") // Keep logging for now
+        let keyName = "\(noteName)\(actualOctave)"
+        // Initialize with default layout values; they get assigned below
         let key = PianoKey(id: midiNote, isWhite: isWhite, name: keyName, hasSample: false)
         keys.append(key)
     }
 
-    // --- Calculate Layout (xOffset) ---
+    // Calculate Layout
     var currentXOffset: CGFloat = 0
+    var lastWhiteKeyIndex: Int? = nil
+
     for i in 0..<keys.count {
-        keys[i].xOffset = currentXOffset
         if keys[i].isWhite {
+            keys[i].width = whiteKeyWidth   // Assign correct width
+            keys[i].height = whiteKeyHeight // Assign correct height
+            keys[i].xOffset = currentXOffset
+            keys[i].zIndex = 0              // Assign correct zIndex
             currentXOffset += whiteKeyWidth
-        }
-    }
-    
-    // --- Refined Black Key Positioning ---
-    for i in 0..<keys.count {
-        if !keys[i].isWhite {
-            if i > 0 {
-                 let precedingKey = keys[i-1]
-                 if precedingKey.isWhite {
-                    keys[i].xOffset = precedingKey.xOffset + precedingKey.width * 0.6
-                 } else if i > 1 {
-                     let prePrecedingKey = keys[i-2]
-                     if prePrecedingKey.isWhite {
-                         keys[i].xOffset = prePrecedingKey.xOffset + prePrecedingKey.width * 0.6
-                     }
-                 }
-            } else { 
-                 keys[i].xOffset = keys[0].width * 0.6 // Handle first black key (C#-2)
+            lastWhiteKeyIndex = i
+        } else { // Black key
+            keys[i].width = blackKeyWidth   // Assign correct width
+            keys[i].height = blackKeyHeight // Assign correct height
+            keys[i].zIndex = 1              // Assign correct zIndex
+            if let lwki = lastWhiteKeyIndex {
+                keys[i].xOffset = keys[lwki].xOffset + keys[lwki].width * 0.6
+            } else {
+                keys[i].xOffset = blackKeyWidth * 0.5
+                print("Warning: Black key at index \(i) ('\(keys[i].name)') appeared before any white key.")
             }
         }
     }
