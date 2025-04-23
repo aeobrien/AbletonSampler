@@ -8,6 +8,14 @@ extension URL: Identifiable {
     public var id: String { absoluteString }
 }
 
+// --- NEW: Identifiable struct for Detail View Segmentation Request ---
+struct SegmentationRequestInfo: Identifiable {
+    let id = UUID() // Conformance to Identifiable
+    let url: URL
+    let note: Int
+}
+// ---------------------------------------------------------------------
+
 struct ContentView: View {
     // Use @StateObject for the initial creation and ownership in the main view
     // if this ContentView is the root where the ViewModel is created.
@@ -26,97 +34,111 @@ struct ContentView: View {
     // ------------------------------
 
     // --- State for Audio Segment Editor --- 
-    @State private var fileURLForEditor: URL? = nil
+    @State private var fileURLForEditor: URL? = nil // Uses .sheet(item: $fileURLForEditor)
     @State private var editorDropTargeted: Bool = false
+
+    // --- State for Detail View's Segmentation Request (REPLACED) --- 
+    // @State private var showingDetailSegmentationSheet: Bool = false
+    // @State private var detailSegmentationURL: URL? = nil
+    // @State private var detailSegmentationNote: Int? = nil
+    @State private var segmentationRequestInfo: SegmentationRequestInfo? = nil // Use item-based sheet
+    // ---------------------------------------------------------------------
 
     // --- State for MIDI Destination (currently unused in UI) ---
     @State private var selectedMidiDestinationEndpoint: MIDIEndpointRef? = nil
 
     var body: some View {
-        // Main layout container
-        VStack(spacing: 0) { // Use spacing 0 if elements should touch, adjust as needed
-            Text("Ableton Sampler Patch Builder")
-                .font(.title)
-                .padding(.top)
-
-            // --- TEST: Reinstate explicit environmentObject injection --- 
-            /* // Commenting out MIDI Setup Button
-            NavigationLink(destination: MIDIView().environmentObject(midiManager)) { // Re-added explicit injection
-                HStack {
-                    Image(systemName: "pianokeys.inverse") // Example MIDI-related icon
-                    Text("MIDI Setup")
+        VStack(spacing: 0) { 
+            // --- Top Header Row --- 
+            HStack {
+                Text("Ableton Sampler Patch Builder")
+                    .font(.title)
+                
+                Spacer() // Push title and drop zone apart
+                
+                // --- Smaller Drop Target for Audio Segment Editor --- 
+                VStack {
+                    // Simplified content for smaller area
+                    HStack {
+                        Image(systemName: "waveform.path.badge.plus")
+                            .font(.title3)
+                        Text("Drop WAV to Edit Segments")
+                            .font(.caption) // Smaller font
+                    }
                 }
-                .padding(.vertical, 5)
-            }
-            */ // End MIDI Setup Button comment
-            // ----------------------------------------
+                .frame(width: 250, height: 50) // Reduced size
+                .background(editorDropTargeted ? Color.accentColor : Color.secondary.opacity(0.2))
+                .cornerRadius(8) // Slightly smaller radius
+                .padding(.vertical, 5) // Add some vertical padding within HStack
+                .onDrop(of: [UTType.fileURL], isTargeted: $editorDropTargeted) { providers, _ -> Bool in
+                    // Ensure only single file drops are handled here
+                    guard providers.count == 1 else { 
+                        viewModel.showError("Please drop only a single WAV file here.")
+                        return false 
+                    }
+                    return handleEditorDrop(providers: providers)
+                }
+                // Add visual feedback on hover for the drop zone
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(editorDropTargeted ? Color.white : Color.clear, lineWidth: 2)
+                )
+                .animation(.easeInOut(duration: 0.1), value: editorDropTargeted)
+                // -----------------------------------------------------
 
-            // --- Piano Roll (C-2 - G8) ---
-            Text("Piano Roll (C-2 - G8)")
-                .font(.headline)
-                .padding(.top)
+            }
+            .padding(.horizontal) // Padding for the whole HStack
+            .padding(.top) // Padding above the HStack
+            .padding(.bottom, 5) // Space below header
+            // -------------------------
+
+            // --- Piano Roll --- 
             PianoKeyboardView(keys: $viewModel.pianoKeys) { selectedKeyId in
-                // Action called when a key is selected in the PianoKeyboardView
                 self.selectedNoteForDetailView = selectedKeyId
             }
-                 // --- REMOVE Horizontal Padding ---
-                 // .padding(.horizontal)
-                 // --- ADD Increased Height for Piano Roll ---
-                 .frame(height: 250) // Increase height to prevent cutoff
-                 .environmentObject(viewModel) // Make sure ViewModel is passed down
-            // ------------------------------------
+            .frame(height: 250)
+            .environmentObject(viewModel)
+            .padding(.bottom)
 
-            Divider() // Visual separator
+            Divider()
 
             // --- Conditionally Display Sample Details --- 
             if let selectedNote = selectedNoteForDetailView {
-                // Filter samples for the selected note
                 let samplesForNote = viewModel.multiSampleParts.filter { $0.keyRangeMin == selectedNote }
-                
-                SampleDetailView(midiNote: selectedNote, samples: samplesForNote)
-                    .environmentObject(viewModel) // Pass down environment object
-                    // Add padding or frame as needed for layout
-                    .padding(.horizontal)
-                    .padding(.top) 
+                SampleDetailView(midiNote: selectedNote, samples: samplesForNote) { url, note in
+                    // Action called by SampleDetailView's drop zone
+                    print("ContentView: Requesting segmentation sheet for \(url.lastPathComponent) on note \(note)")
+                    // Set the state variable to trigger the item-based sheet
+                    self.segmentationRequestInfo = SegmentationRequestInfo(url: url, note: note)
+                    // REMOVED: These are no longer needed
+                    // self.detailSegmentationURL = url
+                    // self.detailSegmentationNote = note
+                    // self.showingDetailSegmentationSheet = true
+                }
+                .environmentObject(viewModel)
+                .padding(.horizontal)
+                .padding(.top) 
             } else {
-                 // Placeholder or instructions when no key is selected
                  Text("Click a key on the piano roll to see sample details.")
                      .foregroundColor(.secondary)
-                     .frame(maxWidth: .infinity, maxHeight: .infinity) // Fill available space
+                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            // -------------------------------------------
+            
+            // --- REMOVED Original Drop Target Position --- 
+            // VStack { ... Drop Single WAV File Here ... } was here
+            // --- ------------------------------------- ---
 
-            Spacer() // Add a Spacer to push the following views down
-
-            // --- Add the Drop Target VStack here, before the Save button ---
-            VStack {
-                Text("Drop Single WAV File Here to Edit Segments")
-                    .font(.headline)
-                    .foregroundColor(editorDropTargeted ? .white : .primary)
-                    .padding()
-                Image(systemName: "waveform.path.badge.plus") // Example icon
-                    .font(.largeTitle)
-                    .padding(.bottom)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 150)
-            .background(editorDropTargeted ? Color.accentColor : Color.secondary.opacity(0.2))
-            .cornerRadius(10)
-            .padding([.horizontal]) // Adjust padding as needed, removed bottom padding here
-            .onDrop(of: [UTType.fileURL], isTargeted: $editorDropTargeted) { providers, _ -> Bool in
-                handleEditorDrop(providers: providers)
-            }
-            .padding(.top) // Add space above drop zone
-
-            // Save button (Now directly below the moved drop zone)
+            // --- Save Button (Now pushed down by SampleDetailView or Spacer) --- 
+            Spacer() // Add spacer to push save button down if detail view is short or absent
             Button("Save ADV File") {
                 print("Save ADV File button tapped")
-                viewModel.saveAdvFile() // Trigger the save process
+                viewModel.saveAdvFile()
             }
-            .padding() // Keep padding around the button
+            .padding()
             .buttonStyle(.borderedProminent)
+
         } // End of main VStack
-        .frame(minWidth: 800, minHeight: 750) // Keep the overall window frame
+        .frame(minWidth: 800, minHeight: 750)
         // Alert for showing save/compression errors
         .alert("Error", isPresented: $viewModel.showingErrorAlert, presenting: viewModel.errorAlertMessage) { _ in
             Button("OK", role: .cancel) { }
@@ -148,15 +170,31 @@ struct ContentView: View {
             // print("DEBUG ALERT: noteNameString = \\(noteNameString)")
             Text("You dropped \(dropInfo.fileURLs.count) files onto \(noteNameString). How should the velocity range be split?")
         }
-        // --- Sheet Modifier using .sheet(item:) --- 
-        .sheet(item: $fileURLForEditor, onDismiss: {
-            // Optional: Any cleanup needed when the sheet is dismissed
-            print("Segment editor sheet dismissed.")
-        }) { url in // The non-nil URL is passed directly into this closure
-            // Pass the viewModel down through the environment
-            AudioSegmentEditorView(audioFileURL: url) // Use the url passed into the closure
+        // --- Sheet for MAIN Audio Segment Editor --- 
+        .sheet(item: $fileURLForEditor, onDismiss: { print("Main editor sheet dismissed.") }) { url in
+            // Present normal editor (no targetNoteOverride)
+            AudioSegmentEditorView(audioFileURL: url, targetNoteOverride: nil)
                 .environmentObject(viewModel)
-            // No need for the 'if let' or the fallback Text view anymore
+        }
+        // --- Sheet for DETAIL VIEW Segmentation Request (MODIFIED) --- 
+        .sheet(item: $segmentationRequestInfo, onDismiss: {
+            print("Detail segmentation sheet dismissed.")
+        }) { info in // The 'info' here is the non-nil SegmentationRequestInfo
+            // Present editor with targetNoteOverride set using data from 'info'
+            AudioSegmentEditorView(audioFileURL: info.url, targetNoteOverride: info.note)
+                .environmentObject(viewModel)
+            // REMOVED: No need for the if-let check or fallback text anymore
+            /*
+            // Ensure URL and Note are available before presenting
+            if let url = detailSegmentationURL, let note = detailSegmentationNote {
+                // Present editor with targetNoteOverride set
+                AudioSegmentEditorView(audioFileURL: url, targetNoteOverride: note)
+                    .environmentObject(viewModel)
+            } else {
+                // Fallback view if state is somehow inconsistent (shouldn't happen)
+                Text("Error: Missing data for segment editor.")
+            }
+             */
         }
         // Removed the duplicate midiNoteName function from ContentView scope
         // Removed the KeyZoneView struct as it's no longer used
@@ -164,11 +202,9 @@ struct ContentView: View {
 
     // --- Drop Handler for the Editor Zone ---
     private func handleEditorDrop(providers: [NSItemProvider]) -> Bool {
-        // We only want to handle a single file drop here
-        guard providers.count == 1, let provider = providers.first else {
-            print("Editor Drop: Requires exactly one item.")
-            viewModel.showError("Please drop only a single WAV file onto the editor area.")
-            return false // Indicate failure if not exactly one provider
+        // We already ensured providers.count == 1 in the onDrop closure
+        guard let provider = providers.first else {
+            return false // Should not happen
         }
 
         var collectedURL: URL? = nil
@@ -183,7 +219,6 @@ struct ContentView: View {
 
                 if let error = error {
                     print("    Editor Drop Error loading item: \(error)")
-                    // Don't show user-facing error for background load issues initially
                     return
                 }
 
@@ -194,41 +229,34 @@ struct ContentView: View {
                     fileURL = url
                 }
 
-                // Validate URL and check for WAV extension
                 if let url = fileURL, url.pathExtension.lowercased() == "wav" {
                     print("    Editor Drop: Successfully loaded WAV URL: \(url.path)")
                     collectedURL = url
                 } else if let url = fileURL {
                     print("    Editor Drop: Skipping non-WAV file: \(url.lastPathComponent)")
-                    // Keep collectedURL as nil to indicate failure later
+                    // Explicitly show error if it's a non-WAV file
+                    viewModel.showError("Only single WAV files can be dropped here.")
                 } else {
                     print("    Editor Drop Error: Could not obtain URL.")
-                    // Keep collectedURL as nil
+                    viewModel.showError("Could not read the dropped file.")
                 }
             }
         } else {
             print("  Editor Drop: Provider does not conform to fileURL.")
-            viewModel.showError("The dropped item was not a file.") // Corrected error message
-            return false // Indicate failure if provider type is wrong
+            viewModel.showError("The dropped item was not a file.")
+            return false
         }
 
-        // Action after loading is complete
         dispatchGroup.notify(queue: .main) {
             if let url = collectedURL {
                 print("Editor Drop: Valid WAV file received. Setting URL state to trigger sheet.")
-                // --- Set the URL state variable; this will trigger the .sheet(item:) modifier ---
                 self.fileURLForEditor = url
             } else {
-                print("Editor Drop: No valid WAV URL collected.")
-                 // Show error only if a file URL was expected but failed validation
-                 if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                     viewModel.showError("The dropped file was not a valid WAV file.")
-                 }
-                 // No error needed if it wasn't a file URL provider to begin with (error shown synchronously above)
+                // Error messages are now shown earlier during processing
+                print("Editor Drop: No valid WAV URL collected or processed.")
             }
         }
-
-        return true // Indicate drop was accepted (async handling follows)
+        return true
     }
 }
 

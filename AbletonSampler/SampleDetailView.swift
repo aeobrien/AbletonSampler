@@ -44,20 +44,18 @@ struct SampleDetailWaveformView: View {
     }
 }
 
-
 struct SampleDetailView: View {
     @EnvironmentObject var viewModel: SamplerViewModel
 
     let midiNote: Int
     let samples: [MultiSamplePartData]
+    let requestSegmentation: (URL, Int) -> Void // Closure to request editor presentation
 
+    // State for existing display
     @State private var audioFileTotalFrames: Int64? = nil
-
-    // --- NEW State for Picker Selection (Only used when count > 1) ---
     @State private var pickerSelectedSample: MultiSamplePartData? = nil
-    // ----------------------------------------------------------------
+    @State private var detailDropTargeted: Bool = false
 
-    // Helper to get the sample to display (either the single one, or the picker selection)
     private var sampleToDisplay: MultiSamplePartData? {
         if samples.count == 1 {
             return samples.first
@@ -67,39 +65,44 @@ struct SampleDetailView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            // --- Header Section --- 
-            HStack {
-                Text("Sample Details for Note \(midiNote) (\(viewModel.pianoKeys.first { $0.id == midiNote }?.name ?? "N/A"))")
-                    .font(.title3)
-                Spacer()
-            }
-            .padding(.bottom, 5)
-
-            // --- Display "No Sample" Message --- 
-            if samples.isEmpty {
-                Text("No sample assigned to this key.")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-                Spacer()
-            } else {
-                // --- Sample Selector (Only if multiple samples exist) ---
-                if samples.count > 1 {
-                    Picker("Select Sample:", selection: $pickerSelectedSample) {
-                        ForEach(samples) { sample in
-                            Text("Sample (Vel: \(sample.velocityRange.min)-\(sample.velocityRange.max))")
-                                .tag(sample as MultiSamplePartData?)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.bottom)
-                }
-
-                // --- Details for the selected/single sample ---
-                // Use the computed property sampleToDisplay
-                if let sample = sampleToDisplay {
-                    Text("Audio File:")
+        normalDetailView
+    }
+    
+    @ViewBuilder
+    private var normalDetailView: some View {
+         VStack(alignment: .leading, spacing: 15) {
+             // --- Header Section --- 
+             HStack {
+                 Text("Sample Details for Note \(midiNote) (\(viewModel.pianoKeys.first { $0.id == midiNote }?.name ?? "N/A"))")
+                     .font(.title3)
+                 Spacer()
+             }
+             .padding(.bottom, 5)
+ 
+             // --- Main Content Area --- 
+             if samples.isEmpty {
+                 Text("No sample assigned to this key.")
+                     .foregroundColor(.secondary)
+                     .frame(maxWidth: .infinity, alignment: .center)
+                     .padding()
+                 dropZoneForDetailView // Show drop zone even when empty
+                 Spacer()
+             } else {
+                 // --- Sample Selector (Only if multiple samples exist) ---
+                 if samples.count > 1 {
+                     Picker("Select Sample:", selection: $pickerSelectedSample) {
+                         ForEach(samples) { sample in
+                             Text("Sample (Vel: \(sample.velocityRange.min)-\(sample.velocityRange.max))")
+                                 .tag(sample as MultiSamplePartData?)
+                         }
+                     }
+                     .pickerStyle(.segmented)
+                     .padding(.bottom)
+                 }
+ 
+                 // --- Details for the selected/single sample ---
+                 if let sample = sampleToDisplay {
+                     Text("Audio File:")
                         .font(.headline)
                     Text(sample.sourceFileURL.lastPathComponent)
                         .font(.body)
@@ -145,46 +148,111 @@ struct SampleDetailView: View {
                         }
                     }
                     .padding(.top)
+                     
+                     Divider().padding(.vertical, 10)
+                     
+                     dropZoneForDetailView // Show drop zone below details
+                     
+                     Spacer()
+ 
+                 } else if samples.count > 1 {
+                     Text("Select a sample above.")
+                         .foregroundColor(.secondary)
+                         .frame(maxWidth: .infinity, alignment: .center)
+                     Spacer()
+                 }
+             }
+         }
+         .padding()
+         .onAppear {
+              if samples.count > 1 && pickerSelectedSample == nil {
+                  pickerSelectedSample = samples.first
+              } 
+              loadAudioFileDetails()
+          }
+          .onChange(of: samples) { 
+              print("SampleDetailView: Samples array changed, reloading details.")
+              if samples.count > 1 {
+                   pickerSelectedSample = samples.first
+              } else {
+                  pickerSelectedSample = nil
+              }
+              loadAudioFileDetails()
+          }
+          .onChange(of: pickerSelectedSample) { 
+              print("SampleDetailView: Picker selection changed, reloading details.")
+              loadAudioFileDetails()
+          }
+    }
 
-                    Spacer() // Pushes details to the top within this block
-
-                } else if samples.count > 1 {
-                    // Only show this if picker is visible but nothing selected
-                    Text("Select a sample above.")
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                    Spacer()
-                }
-                 // No final Spacer needed here, handled within blocks
+    // --- Drop Zone View Builder (Unchanged) --- 
+    @ViewBuilder
+    private var dropZoneForDetailView: some View {
+        VStack {
+            HStack {
+                Image(systemName: "plus.rectangle.on.folder")
+                    .font(.title3)
+                Text("Drop WAV to add to Note \(midiNote)")
+                    .font(.caption)
             }
         }
-        .padding()
-        .onAppear {
-             // Set initial picker selection if needed
-             if samples.count > 1 && pickerSelectedSample == nil {
-                 pickerSelectedSample = samples.first
-             } 
-             // Always load details for the initially relevant sample
-             loadAudioFileDetails()
-         }
-         .onChange(of: samples) { // Reload if the input samples change
-             print("SampleDetailView: Samples array changed, reloading details.")
-             // Reset picker selection if necessary
-             if samples.count > 1 {
-                  pickerSelectedSample = samples.first
-             } else {
-                 pickerSelectedSample = nil
+        .frame(maxWidth: .infinity)
+        .frame(height: 50)
+        .background(detailDropTargeted ? Color.blue.opacity(0.5) : Color.secondary.opacity(0.2))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(detailDropTargeted ? Color.white : Color.clear, lineWidth: 2)
+        )
+        .padding(.top, 5)
+        .onDrop(of: [UTType.fileURL], isTargeted: $detailDropTargeted) { providers -> Bool in
+             guard providers.count == 1 else { 
+                 viewModel.showError("Please drop only a single WAV file here.")
+                 return false 
              }
-             loadAudioFileDetails()
+             return handleDetailDrop(providers: providers)
+        }
+        .animation(.easeInOut(duration: 0.1), value: detailDropTargeted)
+    }
+
+    // --- UPDATED Drop Handler for this View ---
+    private func handleDetailDrop(providers: [NSItemProvider]) -> Bool {
+         guard let provider = providers.first else { return false }
+         var collectedURL: URL? = nil
+         let dispatchGroup = DispatchGroup()
+
+         print("Handling drop for Detail View zone (Note \(midiNote))...")
+
+         if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+             dispatchGroup.enter()
+             provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { (item, error) in
+                 defer { dispatchGroup.leave() }
+                 if let error = error { print("    Detail Drop Error loading item: \(error)"); return }
+
+                 var fileURL: URL?
+                 if let urlData = item as? Data { fileURL = URL(dataRepresentation: urlData, relativeTo: nil) }
+                 else if let url = item as? URL { fileURL = url }
+
+                 if let url = fileURL, url.pathExtension.lowercased() == "wav" {
+                     print("    Detail Drop: Successfully loaded WAV URL: \(url.path)")
+                     collectedURL = url
+                 } else if fileURL != nil { viewModel.showError("Only single WAV files can be dropped here.") }
+                 else { viewModel.showError("Could not read the dropped file.") }
+             }
+         } else { viewModel.showError("The dropped item was not a file."); return false }
+
+         dispatchGroup.notify(queue: .main) {
+             if let url = collectedURL {
+                 print("Detail Drop: Valid WAV file received. Requesting segmentation presentation.")
+                 // --- Call the closure passed from ContentView --- 
+                 requestSegmentation(url, self.midiNote)
+                 // ------------------------------------------------
+             } else { print("Detail Drop: No valid WAV URL collected or processed.") }
          }
-         .onChange(of: pickerSelectedSample) { // Reload if picker selection changes
-             print("SampleDetailView: Picker selection changed, reloading details.")
-             loadAudioFileDetails()
-         }
+         return true
     }
 
     // --- Helper Function to Load Audio Details ---
-    // Uses computed property sampleToDisplay
     func loadAudioFileDetails() {
         guard let sample = sampleToDisplay else {
             print("loadAudioFileDetails: No sample to display, clearing frame count.")
@@ -245,7 +313,9 @@ struct SampleDetailView_Previews: PreviewProvider {
 
         VStack {
             // Preview with samples
-            SampleDetailView(midiNote: 60, samples: [sample1, sample2])
+            SampleDetailView(midiNote: 60, samples: [sample1, sample2]) { url, note in
+                print("Preview: Request segmentation for \(url.lastPathComponent) on note \(note)")
+            }
                 .environmentObject(previewViewModel)
                 .border(Color.blue)
                 .previewDisplayName("With Samples")
@@ -253,7 +323,9 @@ struct SampleDetailView_Previews: PreviewProvider {
             Divider()
             
             // Preview without samples
-            SampleDetailView(midiNote: 61, samples: [])
+            SampleDetailView(midiNote: 61, samples: []) { url, note in
+                print("Preview: Request segmentation for \(url.lastPathComponent) on note \(note)")
+            }
                 .environmentObject(previewViewModel)
                 .border(Color.red)
                 .previewDisplayName("Without Samples")

@@ -1127,95 +1127,211 @@ class SamplerViewModel: ObservableObject {
     }
 
 
-    // MARK: - Segment Handling Logic (NEW)
+    // MARK: - Segment Processing Logic (Moved from Editor)
 
-    /// Adds a new sample part representing a segment of an audio file.
-    /// This is intended to be called from the AudioSegmentEditorView or auto-mapping functions.
-    /// - Parameters:
-    ///   - sourceFileURL: The URL of the original audio file.
-    ///   - segmentStartSample: The starting frame index of the segment.
-    ///   - segmentEndSample: The ending frame index (exclusive) of the segment.
-    ///   - targetNote: The MIDI note number to map this segment to.
-    ///   - velocityRange: Optional velocity range for this segment. Defaults to full range if nil.
-    ///   - segmentName: An optional name for this segment (defaults if nil).
-    ///   - allowOverwrite: If true, removes existing parts on the same note with the same velocity range before adding. If false (e.g., for Round Robin), appends without removing.
-    func addSampleSegment(sourceFileURL: URL, segmentStartSample: Int64, segmentEndSample: Int64, targetNote: Int, velocityRange: VelocityRangeData? = nil, segmentName: String? = nil, allowOverwrite: Bool = true) {
-        print("Attempting to add segment: File=\(sourceFileURL.lastPathComponent), Note=\(targetNote), Vel=\(velocityRange?.min ?? -1)-\(velocityRange?.max ?? -1), Start=\(segmentStartSample), End=\(segmentEndSample), Overwrite=\(allowOverwrite)")
+    /// Adds multiple sample parts based on segments, mapping them to velocity zones on a single note.
+    /// Called from AudioSegmentEditorView.
+    func addSegmentsToNote(segments: [(start: Double, end: Double)], midiNote: Int, sourceURL: URL) {
+        print("ViewModel: Adding \\(segments.count) segments from \\(sourceURL.lastPathComponent) to velocity zones on note \\(midiNote).")
 
-        // 1. Validate segment times
-        guard segmentStartSample >= 0, segmentEndSample > segmentStartSample else {
-            showError("Invalid segment range (Start: \(segmentStartSample), End: \(segmentEndSample)).")
-            print("Error: Invalid segment range.")
+        // First, get the necessary metadata for frame conversion
+        guard let metadata = extractAudioMetadata(fileURL: sourceURL), let totalFrames = metadata.frameCount, totalFrames > 0 else {
+            showError("Could not read metadata or file is empty for \\(sourceURL.lastPathComponent).")
             return
         }
 
-        // 2. Extract metadata from the source file
-        guard let metadata = extractAudioMetadata(fileURL: sourceFileURL) else {
-            showError("Could not read metadata for \(sourceFileURL.lastPathComponent).")
-            print("Error: Could not extract metadata.")
+        // --- Clear existing samples for the target note --- 
+        // Use objectWillChange to ensure UI updates correctly, especially if only removing.
+        DispatchQueue.main.async { self.objectWillChange.send() } 
+        let initialCount = multiSampleParts.count
+        multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
+        if multiSampleParts.count < initialCount {
+             print("ViewModel: Removed \\(initialCount - multiSampleParts.count) existing sample(s) for note \\(midiNote).")
+        }
+        // --------------------------------------------------
+
+        // Set mapping mode to standard when mapping velocity zones
+        setMappingMode(.standard)
+
+        // --- Create new parts with calculated velocity ranges --- 
+        let velocityRanges = calculateSeparateVelocityRanges(numberOfFiles: segments.count)
+        guard velocityRanges.count == segments.count else {
+            print("ViewModel Error: Mismatch count for velocity ranges.")
+            showError("Internal error calculating velocity ranges.")
             return
         }
 
-        // 3. Validate segment range against file length
-        guard let totalFrames = metadata.frameCount else {
-            showError("Could not determine the total frame count for \(sourceFileURL.lastPathComponent).")
-            print("Error: Could not get total frame count from metadata.")
-            return
-        }
-        guard segmentEndSample <= totalFrames else {
-             showError("Segment end (\(segmentEndSample)) exceeds file frame count (\(totalFrames)).")
-             print("Error: Segment end exceeds file frame count.")
-             return
-         }
+        var newParts: [MultiSamplePartData] = []
+        for (index, segment) in segments.enumerated() {
+            // Convert normalized segment times (0.0-1.0) to sample frames
+            let startFrame = Int64(segment.start * Double(totalFrames))
+            let endFrame = Int64(segment.end * Double(totalFrames))
 
-        // 4. Determine the name for the segment
-        let baseName = sourceFileURL.deletingPathExtension().lastPathComponent
-        // Append velocity info to name if not full range
-        var nameSuffix = "_\(segmentStartSample)_\(segmentEndSample)"
-        if let vel = velocityRange, vel != .fullRange {
-            nameSuffix += "_v\(vel.min)-\(vel.max)"
-        }
-        let finalName = segmentName ?? "\(baseName)\(nameSuffix)"
-
-        // 5. Create the MultiSamplePartData for the segment
-        let segmentPartData = MultiSamplePartData(
-            name: finalName,
-            keyRangeMin: targetNote,
-            keyRangeMax: targetNote,
-            // --- UPDATED: Use provided velocity range or default --- 
-            velocityRange: velocityRange ?? .fullRange,
-            sourceFileURL: sourceFileURL,
-            segmentStartSample: segmentStartSample,
-            segmentEndSample: segmentEndSample,
-            relativePath: nil,
-            absolutePath: sourceFileURL.path,
-            originalAbsolutePath: sourceFileURL.path,
-            sampleRate: metadata.sampleRate,
-            fileSize: metadata.fileSize,
-            crc: nil,
-            lastModDate: metadata.lastModDate,
-            originalFileFrameCount: metadata.frameCount
-        )
-
-        // 6. Add the new part to the main data array on the main thread
-        DispatchQueue.main.async {
-            self.objectWillChange.send()
-            if allowOverwrite {
-                // Remove existing parts based on target note AND velocity range
-                // This allows multiple velocity zones on the same note but replaces
-                // specific zones or full-range assignments when overwriting.
-                print(" -> Overwriting enabled: Removing existing parts for Note \(targetNote) with Vel [\(velocityRange?.min ?? 0)-\(velocityRange?.max ?? 127)]")
-                self.multiSampleParts.removeAll { part in
-                    part.keyRangeMin == targetNote &&
-                    part.keyRangeMax == targetNote &&
-                    part.velocityRange == (velocityRange ?? .fullRange) // Match velocity too
-                }
+            // Basic validation for the calculated frames
+            guard startFrame < endFrame, endFrame <= totalFrames else {
+                print("ViewModel Warning: Invalid segment frame range [\\(startFrame)-\\(endFrame)] for file \\(sourceURL.lastPathComponent). Skipping segment \\(index).")
+                continue
             }
-            self.multiSampleParts.append(segmentPartData)
-            print("Successfully added segment '\\(finalName)' [Vel: \\(segmentPartData.velocityRange.min)-\\(segmentPartData.velocityRange.max)] to key \\(targetNote)")
+            
+            let segmentPart = MultiSamplePartData(
+                name: "\\(sourceURL.deletingPathExtension().lastPathComponent)_SegVel\\(index+1)",
+                keyRangeMin: midiNote,
+                keyRangeMax: midiNote,
+                velocityRange: velocityRanges[index], // Assign calculated velocity range
+                sourceFileURL: sourceURL,
+                segmentStartSample: startFrame,
+                segmentEndSample: endFrame,
+                relativePath: nil, // Will be set on save
+                absolutePath: sourceURL.path,
+                originalAbsolutePath: sourceURL.path,
+                sampleRate: metadata.sampleRate,
+                fileSize: metadata.fileSize,
+                lastModDate: metadata.lastModDate,
+                originalFileFrameCount: totalFrames
+            )
+            newParts.append(segmentPart)
+        }
+
+        // Add all new parts on the main thread
+        DispatchQueue.main.async {
+             self.multiSampleParts.append(contentsOf: newParts)
+             print("ViewModel: Successfully added \\(newParts.count) segments as velocity zones to note \\(midiNote).")
+             // The didSet on multiSampleParts will trigger the UI update
+         }
+    }
+
+    /// Adds multiple sample parts based on segments, mapping them sequentially across MIDI notes.
+    /// Called from AudioSegmentEditorView.
+    func autoMapSegmentsSequentially(segments: [(start: Double, end: Double)], startNote: Int, sourceURL: URL) {
+        print("ViewModel: Auto-mapping \\(segments.count) segments sequentially from note \\(startNote) using \\(sourceURL.lastPathComponent).")
+        guard !segments.isEmpty else { return }
+
+        // Get metadata first
+        guard let metadata = extractAudioMetadata(fileURL: sourceURL), let totalFrames = metadata.frameCount, totalFrames > 0 else {
+            showError("Could not read metadata or file is empty for \\(sourceURL.lastPathComponent).")
+            return
+        }
+
+        // --- Determine notes to clear and prepare new parts --- 
+        var newParts: [MultiSamplePartData] = []
+        var notesToClear: Set<Int> = []
+
+        for (index, segment) in segments.enumerated() {
+            let targetNote = startNote + index
+            guard targetNote <= 127 else {
+                print("ViewModel Warning: Reached max MIDI note (127). Stopping sequential mapping.")
+                break // Stop if we exceed MIDI range
+            }
+            
+            notesToClear.insert(targetNote)
+
+            // Convert normalized segment times to frames
+            let startFrame = Int64(segment.start * Double(totalFrames))
+            let endFrame = Int64(segment.end * Double(totalFrames))
+            guard startFrame < endFrame, endFrame <= totalFrames else {
+                print("ViewModel Warning: Invalid segment [\\(segment.start)-\\(segment.end)] for sequential map. Skipping segment \\(index).")
+                continue
+            }
+
+            let segmentPart = MultiSamplePartData(
+                name: "\\(sourceURL.deletingPathExtension().lastPathComponent)_SeqMap\\(index+1)",
+                keyRangeMin: targetNote,
+                keyRangeMax: targetNote,
+                velocityRange: .fullRange, // Full velocity range for sequential mapping
+                sourceFileURL: sourceURL,
+                segmentStartSample: startFrame,
+                segmentEndSample: endFrame,
+                relativePath: nil, // Set on save
+                absolutePath: sourceURL.path,
+                originalAbsolutePath: sourceURL.path,
+                sampleRate: metadata.sampleRate,
+                fileSize: metadata.fileSize,
+                lastModDate: metadata.lastModDate,
+                originalFileFrameCount: totalFrames
+            )
+            newParts.append(segmentPart)
+        }
+        
+        // --- Apply changes on Main Thread --- 
+        DispatchQueue.main.async {
+            self.objectWillChange.send() // Important before mutation
+            // Remove existing samples for the notes being mapped
+            let initialCount = self.multiSampleParts.count
+            self.multiSampleParts.removeAll { $0.keyRangeMin == $0.keyRangeMax && notesToClear.contains($0.keyRangeMin) }
+            if self.multiSampleParts.count < initialCount {
+                 print("ViewModel: Removed \\(initialCount - self.multiSampleParts.count) existing sample(s) in target sequential range.")
+            }
+            // Add the new parts
+            self.multiSampleParts.append(contentsOf: newParts)
+            self.setMappingMode(.standard) // Sequential mapping implies standard mode
+            print("ViewModel: Successfully auto-mapped \\(newParts.count) segments sequentially starting from note \\(startNote).")
+            // didSet will trigger UI update
         }
     }
 
+    // --- NEW: Map Segments as Round Robin from Editor ---
+    /// Adds multiple sample parts based on segments, mapping them as Round Robin parts on a single note.
+    /// Called from AudioSegmentEditorView.
+    func mapSegmentsAsRoundRobin(segments: [(start: Double, end: Double)], midiNote: Int, sourceURL: URL) {
+        print("ViewModel: Mapping \(segments.count) segments as Round Robin from \(sourceURL.lastPathComponent) to note \(midiNote).")
+        guard !segments.isEmpty else {
+            showError("Cannot map: No segments provided.")
+            return
+        }
+
+        // Get metadata first
+        guard let metadata = extractAudioMetadata(fileURL: sourceURL), let totalFrames = metadata.frameCount, totalFrames > 0 else {
+            showError("Could not read metadata or file is empty for \(sourceURL.lastPathComponent). Cannot map Round Robin.")
+            return
+        }
+
+        // --- Prepare New Parts --- 
+        var newParts: [MultiSamplePartData] = []
+        for (index, segment) in segments.enumerated() {
+            // Convert normalized segment times to frames
+            let startFrame = Int64(segment.start * Double(totalFrames))
+            let endFrame = Int64(segment.end * Double(totalFrames))
+            guard startFrame < endFrame, endFrame <= totalFrames else {
+                print("ViewModel Warning: Invalid segment [\(segment.start)-\(segment.end)] for Round Robin map. Skipping segment \(index).")
+                continue
+            }
+
+            let segmentPart = MultiSamplePartData(
+                name: "\(sourceURL.deletingPathExtension().lastPathComponent)_RR_Seg\(index+1)", // Indicate RR + Segment
+                keyRangeMin: midiNote,
+                keyRangeMax: midiNote,
+                velocityRange: .fullRange, // Full velocity range for Round Robin parts
+                sourceFileURL: sourceURL,
+                segmentStartSample: startFrame,
+                segmentEndSample: endFrame,
+                relativePath: nil, // Set on save
+                absolutePath: sourceURL.path,
+                originalAbsolutePath: sourceURL.path,
+                sampleRate: metadata.sampleRate,
+                fileSize: metadata.fileSize,
+                lastModDate: metadata.lastModDate,
+                originalFileFrameCount: totalFrames
+            )
+            newParts.append(segmentPart)
+        }
+        
+        // --- Apply changes on Main Thread --- 
+        DispatchQueue.main.async {
+            self.objectWillChange.send() // Important before mutation
+            // Remove existing samples for the target note before adding RR parts
+            let initialCount = self.multiSampleParts.count
+            self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
+            if self.multiSampleParts.count < initialCount {
+                 print("ViewModel: Removed \(initialCount - self.multiSampleParts.count) existing sample(s) on note \(midiNote) before Round Robin mapping.")
+            }
+            // Add the new Round Robin parts
+            self.multiSampleParts.append(contentsOf: newParts)
+            self.setMappingMode(.roundRobin) // Set mode AFTER adding parts
+            print("ViewModel: Successfully mapped \(newParts.count) segments as Round Robin to note \(midiNote). Set mapping mode.")
+            // didSet will trigger UI update
+        }
+    }
+    // -----------------------------------------------------
 
     // MARK: - Error Handling
 
