@@ -5,117 +5,125 @@ import UniformTypeIdentifiers // For UTType.fileURL
 
 struct PianoKeyboardView: View {
     @Binding var keys: [PianoKey]
-    // Access ViewModel through environment for KeyView drop handling
     @EnvironmentObject var viewModel: SamplerViewModel
 
-    let viewHeight: CGFloat = 150
+    // --- ADD Action Handler --- 
+    let onKeySelect: (Int) -> Void // Closure to call when a key is selected
+    // -------------------------
 
     var body: some View {
-        // Removed Debug Print for first key offset
-        // let _ = print("DEBUG: First key (\(keys.first?.name ?? "N/A")) xOffset: \(keys.first?.xOffset ?? -1)")
+        GeometryReader { geometry in
+            let availableHeight = geometry.size.height
 
-        ScrollView(.horizontal, showsIndicators: true) {
-            let whiteKeys = keys.filter { $0.isWhite }
-            // Calculate total width based on white keys for the ZStack frame
-            let totalWidth = whiteKeys.reduce(0) { $0 + ($1.width ?? 0) }
-            // Removed Debug Print for total width
-            // let _ = print("DEBUG: Calculated totalWidth (sum of white keys): \(totalWidth)")
+            ScrollView(.horizontal, showsIndicators: true) {
+                let whiteKeys = keys.filter { $0.isWhite }
+                let totalWidth = whiteKeys.reduce(0) { $0 + ($1.width ?? 0) }
 
-            // Use ZStack to allow overlaying black keys
-            ZStack(alignment: .topLeading) { // Red Border applied below
-
-                // --- White Keys in an HStack ---
-                // The HStack arranges white keys horizontally with no space between them.
-                HStack(spacing: 0) {
-                    ForEach(keys.filter { $0.isWhite }) { key in
-                        KeyView(key: key)
-                            // NO .offset needed; HStack handles sequential layout.
+                ZStack(alignment: .topLeading) {
+                    // --- White Keys --- 
+                    HStack(spacing: 0) {
+                        ForEach(keys.filter { $0.isWhite }) { key in
+                            // Pass availableHeight and keySelectAction down
+                            KeyView(key: key, availableHeight: availableHeight) { selectedKeyId in
+                                // Call the closure passed from ContentView
+                                onKeySelect(selectedKeyId)
+                            }
                             .environmentObject(viewModel)
-                            // Removed purple debug border
-                            // .border(key.id == keys.first(where: { $0.isWhite })?.id ? Color.purple : Color.clear, width: 2)
+                        }
+                    }
+
+                    // --- Black Keys --- 
+                    ForEach(keys.filter { !$0.isWhite }) { key in
+                        // Pass availableHeight and keySelectAction down
+                        KeyView(key: key, availableHeight: availableHeight) { selectedKeyId in
+                             // Call the closure passed from ContentView
+                             onKeySelect(selectedKeyId)
+                         }
+                        .offset(x: key.xOffset ?? 0, y: 0)
+                        .zIndex(1)
+                        .environmentObject(viewModel)
                     }
                 }
-                // The HStack implicitly determines its width based on children.
-                // Important: The HStack itself is aligned to the topLeading of the ZStack.
-
-                // --- Black Keys (Positioned absolutely within ZStack) ---
-                // These are placed relative to the ZStack's origin, overlaying the HStack.
-                ForEach(keys.filter { !$0.isWhite }) { key in
-                    KeyView(key: key)
-                        // Black keys still need absolute offset from the ZStack's topLeading corner.
-                        .offset(x: key.xOffset ?? 0, y: 0)
-                        .zIndex(1) // Ensure black keys render on top.
-                        .environmentObject(viewModel)
-                }
-            }
-            // The ZStack needs the frame to define the ScrollView's content size.
-            // Using totalWidth ensures the ScrollView knows how far it can scroll.
-            .frame(width: max(totalWidth, 10), height: viewHeight)
-            // Removed red debug border for ZStack
-            // .border(Color.red, width: 2)
-
-        } // End ScrollView
-        .frame(height: viewHeight + 30) // Set height for the whole ScrollView component.
-        // Removed green debug border for ScrollView
-        // .border(Color.green, width: 2)
-        // Added original gray border back
-        .border(Color.gray)
+                .frame(width: max(totalWidth, 10), height: availableHeight)
+            } 
+            .frame(height: geometry.size.height)
+            .border(Color.gray)
+        }
     }
 }
 
-// Represents the visual appearance of a single key - NOW with Drop Target
+// Represents the visual appearance of a single key - NOW with keySelectAction
 struct KeyView: View {
-    @EnvironmentObject var viewModel: SamplerViewModel // Access ViewModel for drop handling
+    @EnvironmentObject var viewModel: SamplerViewModel
     let key: PianoKey
-    @State private var isTargeted: Bool = false // Visual feedback for drop
+    let availableHeight: CGFloat
+    // --- UPDATED Action Handler --- 
+    let keySelectAction: (Int) -> Void // Closure to trigger key selection
+    // -----------------------------
+
+    @State private var isTargeted: Bool = false
+
+    private var keyLabelSpace: CGFloat {
+        key.isWhite ? 25 : 0
+    }
+
+    private var keyDrawingHeight: CGFloat {
+        let heightForDrawing = availableHeight - keyLabelSpace
+        let positiveHeight = max(0, heightForDrawing)
+        let visuallyShorterHeight = max(0, positiveHeight - 40)
+        return key.isWhite ? visuallyShorterHeight : visuallyShorterHeight * 0.65
+    }
 
     var body: some View {
         VStack(spacing: 0) {
              Rectangle()
                 .fill(keyColor)
-                .frame(width: key.width, height: key.height)
+                .frame(width: key.width, height: keyDrawingHeight)
                 .border(Color.black, width: 1)
                 .overlay(
-                    // Sample Indicator
                     key.hasSample ? Circle().fill(Color.red.opacity(0.7)).frame(width: 10, height: 10).padding(5) : nil,
                     alignment: .bottom
                 )
-                // Drop target removed from Rectangle
 
-            // Key Labels below white keys
             if key.isWhite {
                  Text(key.name)
                     .font(.system(size: 10))
-                    .frame(width: key.width)
+                    .frame(width: key.width, height: keyLabelSpace)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxHeight: .infinity, alignment: .top)
                     .padding(.top, 2)
-                    .background(Color.white.opacity(0.001)) // Make label area part of drop target if needed
-            } else {
-                EmptyView()
+                    .background(Color.white.opacity(0.001))
             }
         }
-         // --- Apply Drop Target and Feedback to VStack --- 
-        .contentShape(Rectangle()) // Make the whole VStack the drop target area
+        .contentShape(Rectangle())
         .onDrop(of: [UTType.fileURL], isTargeted: $isTargeted) { providers -> Bool in
              handleDrop(providers: providers)
         }
-        .background(isTargeted ? Color.blue.opacity(0.5) : Color.clear) // Slightly more opaque feedback
+        .background(isTargeted ? Color.blue.opacity(0.5) : Color.clear)
         .animation(.easeInOut(duration: 0.1), value: isTargeted)
-        .frame(width: key.width) // Ensure VStack takes key width
-        // Adjust height based on key type to contain label
-        .frame(height: key.isWhite ? 140 : key.height) 
+        // --- Updated Tap Gesture --- 
+        .onTapGesture {
+             // Always call the action, passing the key ID
+             print("Key \(key.id) ('\(key.name)') tapped, calling keySelectAction.")
+             keySelectAction(key.id)
+         }
+         // ------------------------
+        .frame(width: key.width)
+        .frame(height: availableHeight, alignment: .top)
     }
 
     private var keyColor: Color {
         key.isWhite ? Color.white : Color.black
     }
 
-    // --- Drop Handling Logic (similar to old KeyZoneView) --- 
+    // --- Drop Handling Logic (remains unchanged) ---
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
         var collectedURLs: [URL] = []
         let dispatchGroup = DispatchGroup()
         var loadErrors = false
 
-        print("Handling drop for \\(providers.count) providers on key \\(key.id) ('\\(key.name)')...")
+        print("Handling drop for \(providers.count) providers on key \(key.id) ('\(key.name)')...")
 
         for provider in providers {
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
@@ -124,7 +132,7 @@ struct KeyView: View {
                     defer { dispatchGroup.leave() }
 
                     if let error = error {
-                        print("    Error loading dropped item: \\(error)")
+                        print("    Error loading dropped item: \(error)")
                         loadErrors = true
                         return
                     }
@@ -137,10 +145,10 @@ struct KeyView: View {
                     }
 
                     if let url = fileURL, url.pathExtension.lowercased() == "wav" {
-                        print("    Successfully loaded WAV URL: \\(url.path)")
+                        print("    Successfully loaded WAV URL: \(url.path)")
                         collectedURLs.append(url)
                     } else if let url = fileURL {
-                        print("    Skipping non-WAV file: \\(url.lastPathComponent)")
+                        print("    Skipping non-WAV file: \(url.lastPathComponent)")
                     } else {
                         print("    Error processing dropped item - could not obtain URL.")
                         loadErrors = true
@@ -152,42 +160,42 @@ struct KeyView: View {
         }
 
         dispatchGroup.notify(queue: .main) {
-            print("All drop providers finished loading for key \\(key.id). Collected \\(collectedURLs.count) WAV URLs.")
+            print("All drop providers finished loading for key \(key.id). Collected \(collectedURLs.count) WAV URLs.")
             if !collectedURLs.isEmpty {
-                // Call ViewModel's handler
                 viewModel.handleDroppedFiles(midiNote: key.id, fileURLs: collectedURLs)
             } else {
-                print("No valid WAV URLs collected from the drop on key \\(key.id).")
+                print("No valid WAV URLs collected from the drop on key \(key.id).")
                 if loadErrors {
                     viewModel.showError("Some dropped files could not be read.")
                 }
-                // Optionally show specific error if NO URLs were collected but drop was attempted
                 if providers.count > 0 && collectedURLs.isEmpty && !loadErrors {
                      viewModel.showError("Only WAV files can be dropped onto keys.")
                  }
             }
         }
-        return true // Indicate drop attempt was accepted
+        return true
     }
-    // -------------------------------------------------------
 }
 
-// Preview Provider (Ensure generatePianoKeys is accessible)
+// Preview Provider remains the same
 struct PianoKeyboardView_Previews: PreviewProvider {
     @State static var previewKeys: [PianoKey] = {
-        var keys = generatePianoKeys() // Should work now as it's global
+        var keys = generatePianoKeys()
         if let indexC4 = keys.firstIndex(where: { $0.id == 60 }) { keys[indexC4].hasSample = true }
         if let indexA0 = keys.firstIndex(where: { $0.id == 21 }) { keys[indexA0].hasSample = true }
          if let indexC_2 = keys.firstIndex(where: { $0.id == 0 }) { keys[indexC_2].hasSample = true }
         if let indexG8 = keys.firstIndex(where: { $0.id == 127 }) { keys[indexG8].hasSample = true }
         return keys
     }()
-    // Create a dummy ViewModel for the preview environment
     @StateObject static var previewViewModel = SamplerViewModel()
 
     static var previews: some View {
-        PianoKeyboardView(keys: $previewKeys)
-            .environmentObject(previewViewModel) // Provide the ViewModel
-            .previewLayout(.fixed(width: 1000, height: 250)) // Wider preview
+        PianoKeyboardView(keys: $previewKeys) { selectedKeyId in
+            // Example action for preview
+            print("Preview: Key \(selectedKeyId) selected")
+        }
+            .environmentObject(previewViewModel)
+            .frame(height: 250)
+            .previewLayout(.fixed(width: 1000, height: 300))
     }
 } 

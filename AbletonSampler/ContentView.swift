@@ -21,94 +21,102 @@ struct ContentView: View {
     // Define grid layout
     let columns: [GridItem] = Array(repeating: .init(.flexible()), count: 12) // 12 columns for notes 0-11
 
-    // --- State for Presenting the Audio Segment Editor --- 
-    @State private var fileURLForEditor: URL? = nil // Use this optional URL directly for the sheet
-    @State private var editorDropTargeted: Bool = false // Visual feedback for the editor drop zone
+    // --- State for Selected Note --- 
+    @State private var selectedNoteForDetailView: Int? = nil
+    // ------------------------------
 
-    // --- ADD State for selected MIDI Destination --- 
+    // --- State for Audio Segment Editor --- 
+    @State private var fileURLForEditor: URL? = nil
+    @State private var editorDropTargeted: Bool = false
+
+    // --- State for MIDI Destination (currently unused in UI) ---
     @State private var selectedMidiDestinationEndpoint: MIDIEndpointRef? = nil
 
     var body: some View {
-        // --- ADD NavigationView to enable NavigationLink ---
-        NavigationView {
+        // Main layout container
+        VStack(spacing: 0) { // Use spacing 0 if elements should touch, adjust as needed
+            Text("Ableton Sampler Patch Builder")
+                .font(.title)
+                .padding(.top)
+
+            // --- TEST: Reinstate explicit environmentObject injection --- 
+            /* // Commenting out MIDI Setup Button
+            NavigationLink(destination: MIDIView().environmentObject(midiManager)) { // Re-added explicit injection
+                HStack {
+                    Image(systemName: "pianokeys.inverse") // Example MIDI-related icon
+                    Text("MIDI Setup")
+                }
+                .padding(.vertical, 5)
+            }
+            */ // End MIDI Setup Button comment
+            // ----------------------------------------
+
+            // --- Piano Roll (C-2 - G8) ---
+            Text("Piano Roll (C-2 - G8)")
+                .font(.headline)
+                .padding(.top)
+            PianoKeyboardView(keys: $viewModel.pianoKeys) { selectedKeyId in
+                // Action called when a key is selected in the PianoKeyboardView
+                self.selectedNoteForDetailView = selectedKeyId
+            }
+                 // --- REMOVE Horizontal Padding ---
+                 // .padding(.horizontal)
+                 // --- ADD Increased Height for Piano Roll ---
+                 .frame(height: 250) // Increase height to prevent cutoff
+                 .environmentObject(viewModel) // Make sure ViewModel is passed down
+            // ------------------------------------
+
+            Divider() // Visual separator
+
+            // --- Conditionally Display Sample Details --- 
+            if let selectedNote = selectedNoteForDetailView {
+                // Filter samples for the selected note
+                let samplesForNote = viewModel.multiSampleParts.filter { $0.keyRangeMin == selectedNote }
+                
+                SampleDetailView(midiNote: selectedNote, samples: samplesForNote)
+                    .environmentObject(viewModel) // Pass down environment object
+                    // Add padding or frame as needed for layout
+                    .padding(.horizontal)
+                    .padding(.top) 
+            } else {
+                 // Placeholder or instructions when no key is selected
+                 Text("Click a key on the piano roll to see sample details.")
+                     .foregroundColor(.secondary)
+                     .frame(maxWidth: .infinity, maxHeight: .infinity) // Fill available space
+            }
+            // -------------------------------------------
+
+            Spacer() // Add a Spacer to push the following views down
+
+            // --- Add the Drop Target VStack here, before the Save button ---
             VStack {
-                Text("Ableton Sampler Patch Builder")
-                    .font(.title)
-                    .padding(.top)
-
-                // --- TEST: Reinstate explicit environmentObject injection --- 
-                NavigationLink(destination: MIDIView().environmentObject(midiManager)) { // Re-added explicit injection
-                    HStack {
-                        Image(systemName: "pianokeys.inverse") // Example MIDI-related icon
-                        Text("MIDI Setup")
-                    }
-                    .padding(.vertical, 5)
-                }
-                // ----------------------------------------
-
-                // --- ADD MIDI Output Section --- 
-                Text("MIDI Output Control")
+                Text("Drop Single WAV File Here to Edit Segments")
                     .font(.headline)
-                    .padding(.top)
+                    .foregroundColor(editorDropTargeted ? .white : .primary)
+                    .padding()
+                Image(systemName: "waveform.path.badge.plus") // Example icon
+                    .font(.largeTitle)
+                    .padding(.bottom)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 150)
+            .background(editorDropTargeted ? Color.accentColor : Color.secondary.opacity(0.2))
+            .cornerRadius(10)
+            .padding([.horizontal]) // Adjust padding as needed, removed bottom padding here
+            .onDrop(of: [UTType.fileURL], isTargeted: $editorDropTargeted) { providers, _ -> Bool in
+                handleEditorDrop(providers: providers)
+            }
+            .padding(.top) // Add space above drop zone
 
-                Picker("Select MIDI Output:", selection: $selectedMidiDestinationEndpoint) {
-                    Text("None").tag(MIDIEndpointRef?.none) // Option for no selection
-                    ForEach(midiManager.midiDestinations) { dest in
-                        Text(dest.name).tag(MIDIEndpointRef?.some(dest.id))
-                    }
-                }
-                .padding(.horizontal)
-
-                // --- ADD the Keyboard View --- 
-                KeyboardView(midiManager: midiManager, selectedDestinationEndpoint: selectedMidiDestinationEndpoint)
-                    .padding(.bottom) // Add some space below
-                // ----------------------------------------
-
-                // --- Piano Roll (C-2 - G8) ---
-                Text("Piano Roll (C-2 - G8)")
-                    .font(.headline)
-                    .padding(.top)
-                PianoKeyboardView(keys: $viewModel.pianoKeys) // Pass the binding
-                     // --- REMOVE Horizontal Padding --- 
-                     // .padding(.horizontal)
-                     .environmentObject(viewModel) // Make sure ViewModel is passed down
-                // -------------------------------------
-
-                // --- Drop Target for Audio Segment Editor --- 
-                VStack {
-                    Text("Drop Single WAV File Here to Edit Segments")
-                        .font(.headline)
-                        .foregroundColor(editorDropTargeted ? .white : .primary)
-                        .padding()
-                    Image(systemName: "waveform.path.badge.plus") // Example icon
-                        .font(.largeTitle)
-                        .padding(.bottom)
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 150)
-                .background(editorDropTargeted ? Color.accentColor : Color.secondary.opacity(0.2))
-                .cornerRadius(10)
-                .padding([.horizontal, .bottom])
-                .onDrop(of: [UTType.fileURL], isTargeted: $editorDropTargeted) { providers, _ -> Bool in
-                    handleEditorDrop(providers: providers)
-                }
-
-                Spacer() // Pushes the button to the bottom
-
-                // Save button
-                Button("Save ADV File") {
-                    print("Save ADV File button tapped")
-                    viewModel.saveAdvFile() // Trigger the save process
-                }
-                .padding()
-                .buttonStyle(.borderedProminent)
-            } // End of VStack
-            // --- ADD navigationTitle for the NavigationView ---
-            // This title might be less prominent depending on style, but good practice
-            .navigationTitle("Sampler Builder")
-            // ---------------------------------------------
-        }
-        .frame(minWidth: 800, minHeight: 750) // Increased size for keyboard + picker
+            // Save button (Now directly below the moved drop zone)
+            Button("Save ADV File") {
+                print("Save ADV File button tapped")
+                viewModel.saveAdvFile() // Trigger the save process
+            }
+            .padding() // Keep padding around the button
+            .buttonStyle(.borderedProminent)
+        } // End of main VStack
+        .frame(minWidth: 800, minHeight: 750) // Keep the overall window frame
         // Alert for showing save/compression errors
         .alert("Error", isPresented: $viewModel.showingErrorAlert, presenting: viewModel.errorAlertMessage) { _ in
             Button("OK", role: .cancel) { }
@@ -117,8 +125,8 @@ struct ContentView: View {
         }
         // --- Corrected Alert for choosing velocity split mode ---
         .alert("Multiple Files Dropped", isPresented: $viewModel.showingVelocitySplitPrompt,
-               presenting: viewModel.pendingDropInfo) { dropInfo in
-            // --- Action Buttons --- 
+               presenting: viewModel.pendingDropInfo) { dropInfo in // Corrected: Use viewModel.pendingDropInfo (Data?)
+            // --- Action Buttons ---
             Button("Separate Zones") {
                 viewModel.processMultiDrop(mode: .separate)
             }
@@ -175,6 +183,7 @@ struct ContentView: View {
 
                 if let error = error {
                     print("    Editor Drop Error loading item: \(error)")
+                    // Don't show user-facing error for background load issues initially
                     return
                 }
 
@@ -191,14 +200,15 @@ struct ContentView: View {
                     collectedURL = url
                 } else if let url = fileURL {
                     print("    Editor Drop: Skipping non-WAV file: \(url.lastPathComponent)")
-                    collectedURL = nil
+                    // Keep collectedURL as nil to indicate failure later
                 } else {
                     print("    Editor Drop Error: Could not obtain URL.")
-                    collectedURL = nil
+                    // Keep collectedURL as nil
                 }
             }
         } else {
             print("  Editor Drop: Provider does not conform to fileURL.")
+            viewModel.showError("The dropped item was not a file.") // Corrected error message
             return false // Indicate failure if provider type is wrong
         }
 
@@ -210,9 +220,11 @@ struct ContentView: View {
                 self.fileURLForEditor = url
             } else {
                 print("Editor Drop: No valid WAV URL collected.")
-                if providers.count == 1 { // Avoid duplicate errors
-                    viewModel.showError("The dropped file was not a valid WAV file.")
-                }
+                 // Show error only if a file URL was expected but failed validation
+                 if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                     viewModel.showError("The dropped file was not a valid WAV file.")
+                 }
+                 // No error needed if it wasn't a file URL provider to begin with (error shown synchronously above)
             }
         }
 
@@ -223,13 +235,18 @@ struct ContentView: View {
 // Preview for development
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
+        // --- Initialize ViewModel ---
         let previewViewModel = SamplerViewModel()
-        // --- ADD Mock MIDIManager from KeyboardView's preview --- 
-        let previewMidiManager = KeyboardView_Previews.MockMIDIManager()
-        // Add dummy data for previewing different states
+        // --- Initialize MIDIManager ---
+        // Use the actual MIDIManager if possible, or a mock for isolated preview
+        let previewMidiManager = MIDIManager() // Correct initialization
+
+        // Add dummy data for previewing different states if necessary
         // previewViewModel.multiSampleParts.append(MultiSamplePartData(...))
+
+        // --- Inject both into the environment ---
         ContentView()
             .environmentObject(previewViewModel)
-            .environmentObject(previewMidiManager) // --- INJECT MIDIManager into environment ---
+            .environmentObject(previewMidiManager) // Inject MIDIManager
     }
 }
