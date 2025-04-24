@@ -4,6 +4,8 @@ import AudioKit // For potential audio processing/waveform data
 import AudioKitUI // For waveform view
 
 // Placeholder for Waveform Drawing (Can refine later, potentially reuse/adapt from AudioSegmentEditorView)
+// REMOVED: SampleDetailWaveformView - Replaced by direct use of AudioWaveform
+/*
 struct SampleDetailWaveformView: View {
     let audioFileURL: URL
     let segmentStartSample: Int64
@@ -43,293 +45,384 @@ struct SampleDetailWaveformView: View {
         .padding(.horizontal)
     }
 }
+*/
 
 struct SampleDetailView: View {
     @EnvironmentObject var viewModel: SamplerViewModel
+    @Environment(\.dismiss) var dismiss
 
-    let midiNote: Int
-    let samples: [MultiSamplePartData]
-    let requestSegmentation: (URL, Int) -> Void // Closure to request editor presentation
+    // The MultiSamplePartData being displayed/edited
+    @Binding var samplePart: MultiSamplePartData
 
-    // State for existing display
-    @State private var audioFileTotalFrames: Int64? = nil
-    @State private var pickerSelectedSample: MultiSamplePartData? = nil
-    @State private var detailDropTargeted: Bool = false
+    // --- State for Waveform Data ---
+    @State private var waveformRMSData: [Float]? = nil // Store optional RMS data
+    @State private var isLoadingWaveform: Bool = false
 
-    private var sampleToDisplay: MultiSamplePartData? {
-        if samples.count == 1 {
-            return samples.first
-        } else {
-            return pickerSelectedSample
-        }
+    // --- State for Editing ---
+    // Store local copies of editable properties to avoid direct binding issues
+    // if the underlying samplePart changes unexpectedly.
+    @State private var localName: String
+    @State private var localKeyRangeMin: Int
+    @State private var localKeyRangeMax: Int
+    @State private var localVelocityMin: Int
+    @State private var localVelocityMax: Int
+
+    // --- NEW: State for Waveform Zoom/Scroll ---
+    @State private var horizontalZoom: CGFloat = 1.0
+    @State private var scrollOffsetPercentage: CGFloat = 0.0
+    // ------------------------------------------
+
+    // Initializer to set up local state
+    init(samplePart: Binding<MultiSamplePartData>) {
+        self._samplePart = samplePart
+        // Initialize local state from the bound samplePart's wrapped value
+        _localName = State(initialValue: samplePart.wrappedValue.name)
+        _localKeyRangeMin = State(initialValue: samplePart.wrappedValue.keyRangeMin)
+        _localKeyRangeMax = State(initialValue: samplePart.wrappedValue.keyRangeMax)
+        _localVelocityMin = State(initialValue: samplePart.wrappedValue.velocityRange.min)
+        _localVelocityMax = State(initialValue: samplePart.wrappedValue.velocityRange.max)
     }
 
     var body: some View {
-        normalDetailView
-    }
-    
-    @ViewBuilder
-    private var normalDetailView: some View {
-         VStack(alignment: .leading, spacing: 15) {
-             // --- Header Section --- 
-             HStack {
-                 Text("Sample Details for Note \(midiNote) (\(viewModel.pianoKeys.first { $0.id == midiNote }?.name ?? "N/A"))")
-                     .font(.title3)
-                 Spacer()
-             }
-             .padding(.bottom, 5)
- 
-             // --- Main Content Area --- 
-             if samples.isEmpty {
-                 Text("No sample assigned to this key.")
-                     .foregroundColor(.secondary)
-                     .frame(maxWidth: .infinity, alignment: .center)
-                     .padding()
-                 dropZoneForDetailView // Show drop zone even when empty
-                 Spacer()
-             } else {
-                 // --- Sample Selector (Only if multiple samples exist) ---
-                 if samples.count > 1 {
-                     Picker("Select Sample:", selection: $pickerSelectedSample) {
-                         ForEach(samples) { sample in
-                             Text("Sample (Vel: \(sample.velocityRange.min)-\(sample.velocityRange.max))")
-                                 .tag(sample as MultiSamplePartData?)
+        VStack(alignment: .leading, spacing: 15) {
+            Text("Sample Details")
+                .font(.title)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            // Use localName for editable Text/TextField
+            TextField("Sample Name", text: $localName)
+                .font(.title)
+                .multilineTextAlignment(.center)
+                .textFieldStyle(.plain) // More integrated look
+
+            // Display File Path (Read-only from original binding)
+            Text("Source: \(samplePart.sourceFileURL.lastPathComponent)")
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundColor(.gray)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            Divider()
+
+            // --- UPDATED: Waveform Display with Segment Markers ---
+            Group {
+                if isLoadingWaveform {
+                    ProgressView("Loading Waveform...")
+                        .frame(height: 200) // Match height
+                } else if viewModel.showingErrorAlert && waveformRMSData == nil {
+                    Text("Error loading waveform: \(viewModel.errorAlertMessage ?? "Unknown error")")
+                        .foregroundColor(.red)
+                        .frame(height: 200) // Match height
+                } else if let rmsData = waveformRMSData {
+                     // Pass bindings for zoom/scroll
+                     WaveformDisplayView(
+                         waveformRMSData: rmsData,
+                         horizontalZoom: $horizontalZoom,            // Pass binding
+                         scrollOffsetPercentage: $scrollOffsetPercentage, // Pass binding
+                         segmentStartSample: samplePart.segmentStartSample,
+                         segmentEndSample: samplePart.segmentEndSample,
+                         totalOriginalFrames: samplePart.originalFileFrameCount,
+                         onSegmentUpdate: { newStart, newEnd in
+                             // Call the ViewModel's update function when a marker is dragged
+                             viewModel.updateSegmentBoundary(
+                                 partID: samplePart.id,
+                                 newStartSample: newStart,
+                                 newEndSample: newEnd
+                             )
                          }
-                     }
-                     .pickerStyle(.segmented)
-                     .padding(.bottom)
+                     )
+                     // Match height of placeholders
+                     .frame(height: 200)
+                } else {
+                    // Placeholder if no data and not loading (e.g., initial state or file issue)
+                     Rectangle()
+                         .fill(Color.gray.opacity(0.2))
+                         .frame(height: 200)
+                         .overlay(Text("Waveform not available"))
+                }
+            }
+            .padding(.horizontal)
+
+            // --- Add Sliders (if waveform data exists) ---
+            if !isLoadingWaveform && waveformRMSData != nil && !waveformRMSData!.isEmpty {
+                 HStack {
+                     Text("Time:").frame(width: 80, alignment: .leading)
+                     Slider(value: $horizontalZoom, in: 1.0...50.0) // Min zoom 1x
+                     Text(String(format: "%.1fx", horizontalZoom)).frame(width: 40)
                  }
- 
-                 // --- Details for the selected/single sample ---
-                 if let sample = sampleToDisplay {
-                     Text("Audio File:")
-                        .font(.headline)
-                    Text(sample.sourceFileURL.lastPathComponent)
-                        .font(.body)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                 .padding(.horizontal)
+                 .font(.caption)
+                 // Note: Amplitude slider is internal to WaveformDisplayView, not needed here
+            }
+            // ---------------------------------------------
 
-                    Text("Waveform:")
-                        .font(.headline)
-                        .padding(.top)
+            Divider()
 
-                    // Display Waveform
-                    if let totalFrames = audioFileTotalFrames, totalFrames > 0 {
-                         SampleDetailWaveformView(
-                             audioFileURL: sample.sourceFileURL,
-                             segmentStartSample: sample.segmentStartSample,
-                             segmentEndSample: sample.segmentEndSample,
-                             totalFrames: totalFrames
-                         )
-                     } else {
-                         VStack {
-                             ProgressView()
-                             Text("Loading Waveform...").font(.caption).foregroundColor(.secondary)
+            // --- Editable Properties ---
+            Group {
+                 Text("Mapping").font(.title3)
+
+                 HStack {
+                     Text("Key Range:")
+                     Spacer()
+                     Picker("Min", selection: $localKeyRangeMin) {
+                         ForEach(0..<128) { note in
+                             Text("\(SamplerViewModel.noteNumberToName(note)) (\(note))").tag(note)
                          }
-                         .frame(height: 150)
-                         .frame(maxWidth: .infinity)
-                         .padding(.horizontal)
-                         .background(Color.secondary.opacity(0.1))
-                         .cornerRadius(5)
+                     }
+                     .labelsHidden()
+                     .pickerStyle(.menu)
+                     .onChange(of: localKeyRangeMin) { _, newValue in
+                         localKeyRangeMin = max(0, min(newValue, localKeyRangeMax)) // Clamp min <= max
                      }
 
-                    // Start/End Points
+                     Text("to")
+
+                     Picker("Max", selection: $localKeyRangeMax) {
+                         ForEach(0..<128) { note in
+                             Text("\(SamplerViewModel.noteNumberToName(note)) (\(note))").tag(note)
+                         }
+                     }
+                     .labelsHidden()
+                     .pickerStyle(.menu)
+                     .onChange(of: localKeyRangeMax) { _, newValue in
+                         localKeyRangeMax = max(localKeyRangeMin, min(newValue, 127)) // Clamp min <= max <= 127
+                     }
+                 }
+
+                 HStack {
+                    Text("Velocity Range:")
+                    Spacer()
+                    // Use TextFields for precise input, binding to local state
+                    TextField("Min", value: $localVelocityMin, formatter: NumberFormatter.integer)
+                         .frame(width: 50)
+                         .multilineTextAlignment(.trailing)
+                         .textFieldStyle(RoundedBorderTextFieldStyle())
+                         .onChange(of: localVelocityMin) { _, newValue in
+                             localVelocityMin = max(0, min(newValue, localVelocityMax)) // Clamp 0 <= min <= max
+                         }
+                     Text("to")
+                     TextField("Max", value: $localVelocityMax, formatter: NumberFormatter.integer)
+                         .frame(width: 50)
+                         .multilineTextAlignment(.trailing)
+                         .textFieldStyle(RoundedBorderTextFieldStyle())
+                         .onChange(of: localVelocityMax) { _, newValue in
+                              localVelocityMax = max(localVelocityMin, min(newValue, 127)) // Clamp min <= max <= 127
+                         }
+                 }
+
+                // Display Round Robin Index (read-only for now)
+                if let rrIndex = samplePart.roundRobinIndex {
                      HStack {
-                        VStack(alignment: .leading) {
-                            Text("Segment Start:")
-                                .font(.headline)
-                            Text("\(sample.segmentStartSample) samples")
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing) {
-                            Text("Segment End:")
-                                .font(.headline)
-                            Text("\(sample.segmentEndSample) samples")
-                        }
-                    }
-                    .padding(.top)
-                     
-                     Divider().padding(.vertical, 10)
-                     
-                     dropZoneForDetailView // Show drop zone below details
-                     
-                     Spacer()
- 
-                 } else if samples.count > 1 {
-                     Text("Select a sample above.")
-                         .foregroundColor(.secondary)
-                         .frame(maxWidth: .infinity, alignment: .center)
-                     Spacer()
+                         Text("Round Robin Index:")
+                         Spacer()
+                         Text("\(rrIndex)")
+                     }
                  }
-             }
-         }
-         .padding()
-         .onAppear {
-              if samples.count > 1 && pickerSelectedSample == nil {
-                  pickerSelectedSample = samples.first
-              } 
-              loadAudioFileDetails()
-          }
-          .onChange(of: samples) { 
-              print("SampleDetailView: Samples array changed, reloading details.")
-              if samples.count > 1 {
-                   pickerSelectedSample = samples.first
-              } else {
-                  pickerSelectedSample = nil
-              }
-              loadAudioFileDetails()
-          }
-          .onChange(of: pickerSelectedSample) { 
-              print("SampleDetailView: Picker selection changed, reloading details.")
-              loadAudioFileDetails()
-          }
-    }
 
-    // --- Drop Zone View Builder (Unchanged) --- 
-    @ViewBuilder
-    private var dropZoneForDetailView: some View {
-        VStack {
+                 // Display Segment Boundaries (read-only for now)
+                 // TODO: Make these editable via draggable markers on waveform
+                 HStack {
+                     Text("Segment Start:")
+                     Spacer()
+                     Text("\(samplePart.segmentStartSample) samples")
+                 }
+                 HStack {
+                     Text("Segment End:")
+                     Spacer()
+                     Text("\(samplePart.segmentEndSample) samples")
+                 }
+                 HStack {
+                    Text("Original File Length:")
+                    Spacer()
+                    Text("\(samplePart.originalFileFrameCount ?? -1) samples") // Display original length
+                 }
+                 .font(.caption)
+                 .foregroundColor(.gray)
+
+
+            } // End Group for Editable Properties
+
+            Spacer() // Pushes buttons to bottom
+
+            // --- Action Buttons ---
             HStack {
-                Image(systemName: "plus.rectangle.on.folder")
-                    .font(.title3)
-                Text("Drop WAV to add to Note \(midiNote)")
-                    .font(.caption)
+                Button("Cancel", role: .cancel) {
+                    dismiss()
+                }
+                Spacer()
+                Button("Delete Sample Part", role: .destructive) {
+                    // Confirmation dialog recommended here
+                    viewModel.removeMultiSamplePart(id: samplePart.id)
+                    dismiss()
+                }
+                Spacer()
+                Button("Save Changes") {
+                    saveChanges()
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!hasChanges) // Disable save if no changes
             }
+
+        } // End Main VStack
+        .padding()
+        .task {
+            // Load waveform when the view appears or samplePart changes
+             await loadWaveformForDisplayedSample()
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 50)
-        .background(detailDropTargeted ? Color.blue.opacity(0.5) : Color.secondary.opacity(0.2))
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(detailDropTargeted ? Color.white : Color.clear, lineWidth: 2)
+        .onChange(of: samplePart.id) { _, newID in
+            // Reload waveform if the samplePart binding points to a new part
+            Task {
+                await loadWaveformForDisplayedSample()
+            }
+            // Also reset local state to match the new samplePart
+             resetLocalState()
+        }
+        // Observe changes to segment boundaries coming from the ViewModel/callback
+        .onChange(of: samplePart.segmentStartSample) { _, _ in /* UI updates automatically */ }
+        .onChange(of: samplePart.segmentEndSample) { _, _ in /* UI updates automatically */ }
+        .alert("Error", isPresented: $viewModel.showingErrorAlert, actions: {
+             Button("OK", role: .cancel) { }
+         }, message: {
+             Text(viewModel.errorAlertMessage ?? "An unknown error occurred.")
+         })
+
+    } // End Body
+
+    // --- Helper: Check for Changes ---
+    private var hasChanges: Bool {
+        // Compare local state with the current value of the binding
+        return localName != samplePart.name ||
+               localKeyRangeMin != samplePart.keyRangeMin ||
+               localKeyRangeMax != samplePart.keyRangeMax ||
+               localVelocityMin != samplePart.velocityRange.min ||
+               localVelocityMax != samplePart.velocityRange.max
+    }
+
+     // --- Helper: Reset Local State ---
+     private func resetLocalState() {
+         // Reset local state from the current value of the binding
+         localName = samplePart.name
+         localKeyRangeMin = samplePart.keyRangeMin
+         localKeyRangeMax = samplePart.keyRangeMax
+         localVelocityMin = samplePart.velocityRange.min
+         localVelocityMax = samplePart.velocityRange.max
+         print("Reset local state for part: \(samplePart.id)")
+     }
+
+
+    // --- Waveform Loading (REVERTED) ---
+    @MainActor
+    func loadWaveformForDisplayedSample() async {
+        isLoadingWaveform = true
+        waveformRMSData = nil // Clear previous data
+        // Removed resetting samplesPerPixel state
+        // Clear previous ViewModel error state related to waveform
+        if viewModel.errorAlertMessage?.contains("waveform") ?? false {
+             viewModel.clearError()
+        }
+
+        let fileUrl = samplePart.sourceFileURL
+        // Start accessing security-scoped resource
+        let securityScoped = fileUrl.startAccessingSecurityScopedResource()
+        defer { if securityScoped { fileUrl.stopAccessingSecurityScopedResource() } }
+
+        print("Loading waveform for: \(fileUrl.lastPathComponent)")
+        // Call ViewModel's function - Expects [Float]?
+        let rmsDataResult = await viewModel.getWaveformRMSData(for: fileUrl)
+
+        // Update state on the main actor
+        await MainActor.run {
+            if let rmsData = rmsDataResult {
+                if !rmsData.isEmpty {
+                    self.waveformRMSData = rmsData // Store data
+                    // Removed storing samplesPerPixel
+                    print(" -> Waveform loaded successfully (\(rmsData.count) samples)")
+                } else {
+                    viewModel.showError("Waveform generation resulted in empty data.")
+                    print(" -> Waveform generation gave empty data.")
+                }
+            } else {
+                // ... (Handle nil result)
+                 print(" -> Waveform generation failed or returned nil.")
+            }
+            self.isLoadingWaveform = false
+        }
+    }
+
+    // --- Save Changes ---
+    func saveChanges() {
+        // Create a mutable copy of the sample part's current value
+        var updatedPart = samplePart
+
+        // Update the properties of the copy from local state
+        updatedPart.name = localName
+        updatedPart.keyRangeMin = localKeyRangeMin
+        updatedPart.keyRangeMax = localKeyRangeMax
+        // Use original crossfade values when creating the new VelocityRangeData
+        updatedPart.velocityRange = VelocityRangeData(
+            min: localVelocityMin,
+            max: localVelocityMax,
+            crossfadeMin: samplePart.velocityRange.crossfadeMin, // Preserve original crossfade
+            crossfadeMax: samplePart.velocityRange.crossfadeMax  // Preserve original crossfade
         )
-        .padding(.top, 5)
-        .onDrop(of: [UTType.fileURL], isTargeted: $detailDropTargeted) { providers -> Bool in
-             guard providers.count == 1 else { 
-                 viewModel.showError("Please drop only a single WAV file here.")
-                 return false 
-             }
-             return handleDetailDrop(providers: providers)
-        }
-        .animation(.easeInOut(duration: 0.1), value: detailDropTargeted)
+
+        // Call ViewModel to update the actual data source
+        viewModel.updateMultiSamplePart(updatedPart)
+        print("Saved changes for part: \(updatedPart.id)")
     }
 
-    // --- UPDATED Drop Handler for this View ---
-    private func handleDetailDrop(providers: [NSItemProvider]) -> Bool {
-         guard let provider = providers.first else { return false }
-         var collectedURL: URL? = nil
-         let dispatchGroup = DispatchGroup()
+} // End Struct
 
-         print("Handling drop for Detail View zone (Note \(midiNote))...")
+// MARK: - Preview
 
-         if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-             dispatchGroup.enter()
-             provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { (item, error) in
-                 defer { dispatchGroup.leave() }
-                 if let error = error { print("    Detail Drop Error loading item: \(error)"); return }
+struct SampleDetailView_Previews: PreviewProvider {
+    // Static state for the preview binding
+    @State static var previewPart = MultiSamplePartData.example
 
-                 var fileURL: URL?
-                 if let urlData = item as? Data { fileURL = URL(dataRepresentation: urlData, relativeTo: nil) }
-                 else if let url = item as? URL { fileURL = url }
-
-                 if let url = fileURL, url.pathExtension.lowercased() == "wav" {
-                     print("    Detail Drop: Successfully loaded WAV URL: \(url.path)")
-                     collectedURL = url
-                 } else if fileURL != nil { viewModel.showError("Only single WAV files can be dropped here.") }
-                 else { viewModel.showError("Could not read the dropped file.") }
-             }
-         } else { viewModel.showError("The dropped item was not a file."); return false }
-
-         dispatchGroup.notify(queue: .main) {
-             if let url = collectedURL {
-                 print("Detail Drop: Valid WAV file received. Requesting segmentation presentation.")
-                 // --- Call the closure passed from ContentView --- 
-                 requestSegmentation(url, self.midiNote)
-                 // ------------------------------------------------
-             } else { print("Detail Drop: No valid WAV URL collected or processed.") }
-         }
-         return true
-    }
-
-    // --- Helper Function to Load Audio Details ---
-    func loadAudioFileDetails() {
-        guard let sample = sampleToDisplay else {
-            print("loadAudioFileDetails: No sample to display, clearing frame count.")
-            audioFileTotalFrames = nil
-            return
-        }
-        print("loadAudioFileDetails: Loading frames for \(sample.sourceFileURL.lastPathComponent)")
-        Task {
-            do {
-                let file = try AVAudioFile(forReading: sample.sourceFileURL)
-                await MainActor.run {
-                     self.audioFileTotalFrames = file.length
-                     print("Loaded audio file: \(sample.sourceFileURL.lastPathComponent), Frames: \(file.length)")
-                 }
-            } catch {
-                print("Error loading AVAudioFile for \(sample.sourceFileURL.lastPathComponent): \(error)")
-                await MainActor.run {
-                     self.audioFileTotalFrames = nil
-                 }
-            }
-        }
+    static var previews: some View {
+        // Pass the binding to the state variable
+        SampleDetailView(samplePart: $previewPart)
+            .environmentObject(SamplerViewModel()) // Provide a ViewModel
+            .frame(width: 400, height: 600) // Give it some size for preview
     }
 }
 
-// MARK: - Preview Provider
-struct SampleDetailView_Previews: PreviewProvider {
-    static let previewViewModel = SamplerViewModel()
+// MARK: - Helper Extensions (e.g., NumberFormatter)
 
-    static var previews: some View {
-        // Create some dummy sample data for the preview
-        let dummyFileURL = URL(fileURLWithPath: "/path/to/dummy/sample.wav")
-        let sample1 = MultiSamplePartData(
-            name: "Sample 1",
-            keyRangeMin: 60, keyRangeMax: 60,
-            velocityRange: VelocityRangeData(min: 0, max: 90, crossfadeMin: 0, crossfadeMax: 90),
-            sourceFileURL: dummyFileURL,
-            segmentStartSample: 1000, segmentEndSample: 50000,
-            absolutePath: dummyFileURL.path,
-            originalAbsolutePath: dummyFileURL.path,
-            sampleRate: 44100,
-            fileSize: 102400,
-            lastModDate: Date(),
-            originalFileFrameCount: 100000 // Set a dummy total frame count
-        )
-        let sample2 = MultiSamplePartData(
-            name: "Sample 2 High Vel",
-            keyRangeMin: 60, keyRangeMax: 60,
-            velocityRange: VelocityRangeData(min: 91, max: 127, crossfadeMin: 91, crossfadeMax: 127),
-            sourceFileURL: dummyFileURL,
-            segmentStartSample: 60000, segmentEndSample: 90000,
-            absolutePath: dummyFileURL.path,
-            originalAbsolutePath: dummyFileURL.path,
-            sampleRate: 44100,
-            fileSize: 102400,
-            lastModDate: Date(),
-            originalFileFrameCount: 100000 // Use same dummy total
-        )
+extension NumberFormatter {
+    static var integer: NumberFormatter {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .none
+        formatter.allowsFloats = false
+        return formatter
+    }
+}
 
-        VStack {
-            // Preview with samples
-            SampleDetailView(midiNote: 60, samples: [sample1, sample2]) { url, note in
-                print("Preview: Request segmentation for \(url.lastPathComponent) on note \(note)")
-            }
-                .environmentObject(previewViewModel)
-                .border(Color.blue)
-                .previewDisplayName("With Samples")
-            
-            Divider()
-            
-            // Preview without samples
-            SampleDetailView(midiNote: 61, samples: []) { url, note in
-                print("Preview: Request segmentation for \(url.lastPathComponent) on note \(note)")
-            }
-                .environmentObject(previewViewModel)
-                .border(Color.red)
-                .previewDisplayName("Without Samples")
-        }
-        .frame(height: 400) // Give the VStack a height for preview
+// Add an example to MultiSamplePartData for previews
+extension MultiSamplePartData {
+    static var example: MultiSamplePartData {
+        MultiSamplePartData(
+            name: "Preview Sample",
+            keyRangeMin: 60, // C4
+            keyRangeMax: 60, // C4
+            velocityRange: VelocityRangeData(min: 0, max: 127, crossfadeMin: 0, crossfadeMax: 127), // Use correct initializer
+            sourceFileURL: URL(fileURLWithPath: "/path/to/fake/preview.wav"), // Needs a real placeholder?
+            segmentStartSample: 1000,
+            segmentEndSample: 44100,
+            roundRobinIndex: nil,
+            relativePath: "preview.wav", // Assuming it's in Samples/Imported for preview
+            absolutePath: "/path/to/fake/preview.wav", // Placeholder
+            originalAbsolutePath: "/path/to/fake/preview.wav", // Placeholder
+            // Corrected order: sampleRate, fileSize, crc, lastModDate THEN originalFileFrameCount
+            sampleRate: 44100.0, // Example sample rate
+            fileSize: 176400, // Example file size
+            crc: nil, // CRC usually calculated
+            lastModDate: Date(), // Example date
+            originalFileFrameCount: 88200 // Example frame count
+            // Other properties use defaults or calculated values
+        )
     }
 } 

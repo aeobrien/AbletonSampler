@@ -204,7 +204,7 @@ class SamplerViewModel: ObservableObject {
     init() {
         print("SamplerViewModel initialized.")
         // Keep cache clear for testing
-        self.waveformCache = [:]
+        self.waveformCache = [:] 
         print("Waveform cache cleared.")
         self.pianoKeys = generatePianoKeys()
         updatePianoKeySampleStatus()
@@ -438,7 +438,7 @@ class SamplerViewModel: ObservableObject {
              return
         }
 
-        // --- Prepare Parts (no velocity calc needed) ---
+        // --- Prepare Parts (no velocity calc needed) --- 
         var newPartsData: [MultiSamplePartData] = []
         for (index, fileURL) in fileURLs.enumerated() {
             guard let metadata = extractAudioMetadata(fileURL: fileURL) else {
@@ -467,7 +467,7 @@ class SamplerViewModel: ObservableObject {
             print("Prepared RR part \(index + 1)/\(numberOfFiles): \(partData.name) for key \(midiNote)")
         }
 
-        // --- Add Parts and Update State ---
+        // --- Add Parts and Update State --- 
         DispatchQueue.main.async {
             self.objectWillChange.send()
             // First, clear *all* existing parts for the target note before adding RR samples.
@@ -1334,15 +1334,14 @@ class SamplerViewModel: ObservableObject {
     // MARK: - Transient Detection (REVERTED - Modified Normalization)
 
     /// Detects transients in waveform RMS data.
-    /// Detects transients in waveform RMS data.
     /// - Parameters:
     ///   - rmsData: An array of pre-calculated RMS or amplitude values.
     ///   - threshold: Sensitivity threshold (0.0 to 1.0). Lower value = more sensitive.
-    ///   - totalFrames: The total number of frames in the original audio file (Used for context/validation, but primary calculation uses RMS count).
+    ///   - totalFrames: The total number of frames in the original audio file (Used for clamping final calculation if needed, but primary calculation uses RMS count).
     /// - Returns: An array of normalized positions (`Double` from 0.0 to 1.0) where transients were detected.
     /// - Throws: Potential calculation errors.
     func detectTransients(rmsData: [Float], threshold: Float, totalFrames: Int64) throws -> [Double] { // Corrected Signature
-        // --- START Correct Function Body ---
+        // --- START Function Body Correction ---
         guard !rmsData.isEmpty else {
             print("Transient Detection: RMS data is empty.")
             return []
@@ -1359,15 +1358,12 @@ class SamplerViewModel: ObservableObject {
         var transientPositions: [Double] = [] // Store normalized positions
         let minEnergyThreshold: Float = 0.005
         let debounceSamples: Int = 2 // Debounce based on RMS sample indices
-        var lastTransientRMSIndex: Int = -debounceSamples // Use correct initial value for debounce
+        var lastTransientRMSIndex: Int = -debounceSamples // Use correct initial value
 
         // Calculate differences between consecutive RMS values
         var differences: [Float] = []
         for i in 0..<(dataCount - 1) { differences.append(abs(rmsData[i+1] - rmsData[i])) }
-        guard let maxDifference = differences.max(), maxDifference > 0 else {
-             print("Transient Detection: No significant differences found.")
-             return []
-        }
+        guard let maxDifference = differences.max(), maxDifference > 0 else { return [] }
 
         // Look for peaks in the differences
         for i in 0..<differences.count { // i is the index *before* the potential peak at i+1
@@ -1377,8 +1373,7 @@ class SamplerViewModel: ObservableObject {
              // Check threshold, minimum energy, and debounce
              // Use peakRMSIndex for debounce comparison
              if normalizedDiff > threshold && rmsData[peakRMSIndex] > minEnergyThreshold && peakRMSIndex > (lastTransientRMSIndex + debounceSamples) {
-                 // --- Calculate Normalized Position directly from RMS index ---
-                 // Use dataCount - 1 for correct scaling across points
+                 // --- Calculate Normalized Position directly from RMS index --- 
                  let normalizedPosition = Double(peakRMSIndex) / Double(dataCount - 1)
                  // --- END CALCULATION ---
 
@@ -1393,7 +1388,7 @@ class SamplerViewModel: ObservableObject {
 
         print("Transient Detection Complete: Found \(transientPositions.count) transients (normalized positions).")
         return transientPositions.sorted() // Return sorted [Double]
-        // --- END Correct Function Body ---
+        // --- END Function Body Correction ---
     }
 
     // MARK: - Error Handling

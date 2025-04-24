@@ -1,25 +1,13 @@
+// AbletonSampler/AbletonSampler/AudioSegmentEditorView.swift
 import SwiftUI
 import AVFoundation
 import AudioKit // Import the main AudioKit framework
-import AudioKitUI // Import the UI components
-// import AbletonSampler // Explicitly import the module if needed
+// import AudioKitUI // No longer needed directly here
 
-// Placeholder for the waveform view component
-struct WaveformView: View {
-    // TODO: Implement waveform drawing logic
-    var body: some View {
-        Rectangle()
-            .fill(Color.gray.opacity(0.3))
-            .frame(height: 150) // Example height
-            .overlay(Text("Waveform Placeholder").foregroundColor(.white))
-    }
-}
-
-// --- UPDATED: Marker View with Draggable Handle ---
+// --- Marker View (UPDATED) ---
 struct MarkerView: View {
-    // Binding to indicate if this specific marker is being dragged
-    // This can be used for visual feedback (e.g., changing color)
     @Binding var isBeingDragged: Bool
+    let viewHeight: CGFloat // NEW: Pass height dynamically
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,78 +18,74 @@ struct MarkerView: View {
                 .shadow(radius: 2)
                 .padding(.bottom, -1) // Overlap slightly with the line
 
-            // Marker Line
+            // Marker Line (Uses dynamic height)
             Rectangle()
                 .fill(Color.red)
-                .frame(width: 2, height: 150)
+                .frame(width: 2, height: viewHeight) // Use passed height
                 .opacity(0.7)
         }
-        .contentShape(Rectangle().size(width: 20, height: 170)) // Increase tappable area
+        // Adjust tappable area based on height
+        .contentShape(Rectangle().size(width: 20, height: viewHeight + 20))
     }
 }
+
 
 struct AudioSegmentEditorView: View {
     @EnvironmentObject var viewModel: SamplerViewModel
     @Environment(\.dismiss) var dismiss
 
     let audioFileURL: URL
-    // --- NEW: Optional override for target note context ---
-    let targetNoteOverride: Int? // If provided, restricts mapping options
-    // ------------------------------------------------------
+    let targetNoteOverride: Int?
 
     // --- State for Audio Data & Waveform ---
     @State private var audioFile: AVAudioFile? = nil
     @State private var audioInfo: String = "Loading audio..."
     @State private var totalFrames: Int64? = nil
-    @State private var waveformWidth: CGFloat = 0
-    // --- UPDATED: State for waveform RMS data ---
-    @State private var waveformRMSData: [Float] = [] // Store calculated RMS values
+    @State private var waveformRMSData: [Float] = []
     @State private var isLoadingWaveform = true
 
-    // --- State for Markers & Segments ---
-    @State private var markers: [Double] = []
-    // This state is less relevant if we hide the per-segment picker when targetNoteOverride is set
+    // --- State for Markers & Segments (CHANGED TYPE) ---
+    @State private var markers: [Double] = [] // Store Normalized Positions (0.0 to 1.0)
     @State private var selectedSegmentIndex: Int? = nil
 
     // --- State for Mapping ---
-    // Use targetNoteOverride if available, otherwise default/allow selection
-    @State private var targetMidiNote: Int // Needs initialization
+    @State private var targetMidiNote: Int // Initialized in init
 
-    // --- Computed property for the full MIDI range (0-127) --- 
-    private var availablePianoKeys: [PianoKey] {
-        // Assuming viewModel.pianoKeys now holds the full 0-127 range.
-        return viewModel.pianoKeys
-    }
-    private var availableMidiNoteRange: Range<Int> {
-        // Full MIDI range
-        return 0..<128 // Use 128 for exclusive upper bound (0...127)
-    }
+    // --- Computed property for the full MIDI range (0-127) ---
+    private var availablePianoKeys: [PianoKey] { viewModel.pianoKeys }
+    private var availableMidiNoteRange: Range<Int> { 0..<128 }
 
-    // --- NEW: State for Dragging Markers ---
+    // --- State for Dragging Markers ---
     @State private var draggedMarkerIndex: Int? = nil
-    // Use GestureState for smooth updates during drag without complex state management
     @GestureState private var dragOffset: CGSize = .zero
 
-    // --- NEW: Auto-Mapping State (Updated Defaults) --- 
-    @State private var autoMapStartNote: Int = 24 // Default to C0 (MIDI 24)
-    @State private var velocityMapTargetNote: Int = 60 // Default to C4 (MIDI 60)
-    @State private var roundRobinTargetNote: Int = 60 // Default to C4 (MIDI 60)
+    // --- Auto-Mapping State ---
+    @State private var autoMapStartNote: Int = 24 // Default C0
+    @State private var velocityMapTargetNote: Int = 60 // Default C4
+    @State private var roundRobinTargetNote: Int = 60 // Default C4
 
-    // --- NEW: Transient Detection State ---
-    @State private var transientThreshold: Double = 0.1 // Default sensitivity (0.0 to 1.0)
-    // Higher value = less sensitive (fewer markers), Lower value = more sensitive (more markers)
+    // --- Transient Detection State ---
+    // Threshold: Lower value = MORE sensitive (detects smaller changes)
+    // Slider: 0.01 (Max Sensitivity) to 0.99 (Min Sensitivity)
+    @State private var transientThreshold: Double = 0.1 // Default sensitivity
+
+    // --- NEW: State for Zoom/Scroll (lifted from WaveformDisplayView) ---
+    @State private var horizontalZoom: CGFloat = 1.0
+    @State private var scrollOffsetPercentage: CGFloat = 0.0
+    // ------------------------------------------------------------------
 
     // --- Computed Property: Number of Segments ---
-    private var numberOfSegments: Int {
-        markers.count + 1
-    }
+    private var numberOfSegments: Int { markers.count + 1 }
 
-    // --- Initializer --- 
+    // Define a constant for the waveform height
+    private let waveformViewHeight: CGFloat = 150
+
+    // --- Initializer ---
     init(audioFileURL: URL, targetNoteOverride: Int? = nil) {
         self.audioFileURL = audioFileURL
         self.targetNoteOverride = targetNoteOverride
-        // Initialize targetMidiNote based on override or default
-        self._targetMidiNote = State(initialValue: targetNoteOverride ?? 60) // Default C4 if no override
+        _targetMidiNote = State(initialValue: targetNoteOverride ?? 60)
+        print("AudioSegmentEditorView initialized for: \(audioFileURL.lastPathComponent)")
     }
 
     var body: some View {
@@ -113,558 +97,563 @@ struct AudioSegmentEditorView: View {
                 .font(.caption)
                 .lineLimit(1)
 
-            // --- Waveform Display using AudioKitUI --- 
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    if isLoadingWaveform {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.gray.opacity(0.3))
-                    } else if !waveformRMSData.isEmpty {
-                        AudioWaveform(rmsVals: waveformRMSData)
-                            .foregroundColor(.accentColor)
-                            .onAppear {
-                                self.waveformWidth = geometry.size.width
-                                print("Waveform Width: \(self.waveformWidth)")
-                            }
-                    } else {
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.3))
-                            .overlay(Text("Could not load waveform").foregroundColor(.white))
-                    }
+            // --- Waveform Display and Markers ---
+            ZStack {
+                WaveformDisplayView(
+                    waveformRMSData: waveformRMSData,
+                    horizontalZoom: $horizontalZoom,
+                    scrollOffsetPercentage: $scrollOffsetPercentage
+                )
+                .frame(height: waveformViewHeight)
 
-                    // --- UPDATED: Display Markers with Drag Gesture ---
-                    ForEach(markers.indices, id: \.self) { index in
-                        let isDraggingThisMarker = (draggedMarkerIndex == index)
-                        let markerValue = markers[index]
-                        let initialXPosition = calculateMarkerXPosition(markerValue: markerValue)
+                // --- Overlay for Transient Markers ---
+                if !isLoadingWaveform && !waveformRMSData.isEmpty {
+                    GeometryReader { geometry in
+                        let currentViewWidth = geometry.size.width
 
-                        // Calculate current position based on drag offset IF this marker is dragged
-                        let currentXPosition = isDraggingThisMarker ? initialXPosition + dragOffset.width : initialXPosition
+                        // --- Calls to helper functions ---
+                        let totalWaveformW = calculateTotalWaveformWidth(viewWidth: currentViewWidth)
+                        let scrollOffsetPts = calculateCurrentScrollOffsetPoints(viewWidth: currentViewWidth)
 
-                        MarkerView(isBeingDragged: .constant(isDraggingThisMarker))
-                            .position(x: currentXPosition, y: geometry.size.height / 2) // Center marker vertically
-                            .gesture(
-                                DragGesture(minimumDistance: 1)
-                                    .updating($dragOffset) { value, state, _ in
-                                        // Update GestureState smoothly during drag
-                                        state = value.translation
-                                        // Set the index ONLY when drag starts
-                                        DispatchQueue.main.async {
-                                             if self.draggedMarkerIndex == nil {
-                                                 self.draggedMarkerIndex = index
-                                             }
-                                         }
+                        // --- CORRECTED Marker Positioning (using Normalized Values) ---
+                        ForEach(markers.indices, id: \.self) { index in
+                            let isDraggingThisMarker = (draggedMarkerIndex == index)
+                            let markerValue = markers[index] // Get normalized value
+
+                            // Convert normalized value to view X position using REVERTED helper
+                            let viewX = xPositionForMarker(markerValue: markerValue, viewWidth: currentViewWidth, totalWaveformW: totalWaveformW, scrollOffsetPts: scrollOffsetPts)
+
+                            // Only display if within view bounds
+                            if viewX >= -1 && viewX <= currentViewWidth + 1 {
+                                let currentXPosition = isDraggingThisMarker ? viewX + dragOffset.width : viewX
+                                let clampedXPosition = max(0, min(currentViewWidth, currentXPosition))
+
+                                // --- UPDATED DEBUG PRINT ---
+                                let _ = print("  -> Marker[\(index)]: Value=\(String(format: "%.4f", markerValue)), ViewX=\(String(format: "%.2f", viewX)), ClampedX=\(String(format: "%.2f", clampedXPosition)), Width=\(String(format: "%.0f", currentViewWidth)), TotalW=\(String(format: "%.0f", totalWaveformW)), Offset=\(String(format: "%.0f", scrollOffsetPts))")
+                                
+                                MarkerView(isBeingDragged: .constant(isDraggingThisMarker), viewHeight: geometry.size.height)
+                                    .position(x: clampedXPosition, y: geometry.size.height / 2)
+                                    .onTapGesture(count: 2) {
+                                        print("Double tapped marker index: \(index)")
+                                        deleteMarker(at: index)
                                     }
-                                    .onEnded { value in
-                                        // Finalize position on drag end
-                                        finalizeMarkerDrag(index: index, dragTranslation: value.translation)
-                                        // Reset dragged index
-                                        self.draggedMarkerIndex = nil
-                                    }
-                            )
-                    }
-                }
-                .contentShape(Rectangle()) // Make the whole ZStack tappable for adding markers
-                .gesture(DragGesture(minimumDistance: 0).onEnded { value in
-                     // Add marker only if not dragging and waveform is loaded
-                     if draggedMarkerIndex == nil, !isLoadingWaveform, !waveformRMSData.isEmpty {
-                         addMarker(at: value.location)
-                     }
-                 })
-                 .onAppear { // Store initial width
-                     self.waveformWidth = geometry.size.width
-                     print("Initial Waveform Width: \(self.waveformWidth)")
-                 }
-                 .onChange(of: geometry.size.width) { oldValue, newValue in
-                    if waveformWidth != newValue && newValue > 0 {
-                         self.waveformWidth = newValue
-                         print("Waveform Width Changed: \(self.waveformWidth)")
-                     }
-                 }
-            }
-            .frame(height: 150)
+                                    .gesture(
+                                        DragGesture(minimumDistance: 1)
+                                            .updating($dragOffset) { value, state, _ in
+                                                state = value.translation
+                                                DispatchQueue.main.async {
+                                                     if self.draggedMarkerIndex == nil { self.draggedMarkerIndex = index }
+                                                 }
+                                            }
+                                            .onEnded { value in
+                                                // Pass necessary info to finalize (using REVERTED logic)
+                                                finalizeMarkerDrag(index: index, originalViewX: viewX, dragTranslation: value.translation, currentViewWidth: currentViewWidth, totalWaveformWidth: totalWaveformW, scrollOffsetPoints: scrollOffsetPts)
+                                                self.draggedMarkerIndex = nil
+                                            }
+                                    )
+                            } else { EmptyView() }
+                        } // End ForEach
+
+                        // Attach tap gesture HERE (Using REVERTED logic)
+                        .contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: 0).onEnded { value in
+                             if draggedMarkerIndex == nil, !isLoadingWaveform, !waveformRMSData.isEmpty {
+                                 // Convert tap location to normalized position using REVERTED helper
+                                 let newNormalizedPosition = normalizedPositionForViewX(value.location.x, viewWidth: currentViewWidth, totalWaveformW: totalWaveformW, scrollOffsetPts: scrollOffsetPts)
+                                 // Call REVERTED addMarker
+                                 addMarker(normalizedPosition: newNormalizedPosition, currentViewWidth: currentViewWidth, totalWaveformWidth: totalWaveformW)
+                             }
+                         })
+                        .clipped()
+                    } // End GeometryReader
+                    .frame(height: waveformViewHeight)
+                } // End if !isLoadingWaveform
+            } // End ZStack
             .padding(.horizontal)
+            .padding(.bottom, 10)
+
+            // --- Time Zoom Slider (Moved here) ---
+            HStack {
+                Text("Time:").frame(width: 80, alignment: .leading)
+                Slider(value: $horizontalZoom, in: 1.0...50.0) // Min zoom 1x
+                Text(String(format: "%.1fx", horizontalZoom)).frame(width: 40)
+            }
+            .padding(.horizontal)
+            .font(.caption)
+            // --- END Time Zoom Slider ---
 
             // --- Marker Controls ---
-             HStack {
-                 Button("Clear All Markers") {
-                     markers.removeAll()
-                     selectedSegmentIndex = nil // Deselect segment if markers are cleared
-                 }
+            HStack {
+                 Button("Clear All Markers") { markers.removeAll(); selectedSegmentIndex = nil }
                  .disabled(markers.isEmpty)
-
                  Spacer()
-
-                 // --- NEW: Transient Detection Controls ---
                  VStack(alignment: .trailing) {
-                     Button("Detect Transients") {
-                         detectAndSetTransients()
-                     }
-                     .disabled(isLoadingWaveform || waveformRMSData.isEmpty)
-
+                     Button("Detect Transients") { detectAndSetTransients() }
+                     // Disable if loading or file missing
+                     .disabled(isLoadingWaveform || audioFile == nil)
                      HStack {
                          Text("Sensitivity:")
-                         Slider(value: $transientThreshold, in: 0.01...1.0) // Avoid 0 threshold
+                         // Slider: 0.01 (Max Sensitivity) to 0.99 (Min Sensitivity)
+                         Slider(value: $transientThreshold, in: 0.01...0.99)
                              .frame(width: 100)
                      }
                      .font(.caption)
                  }
-                 // -------------------------------------
              }
              .padding(.horizontal)
 
             // --- Segment Information & Mapping ---
             Text(audioInfo)
-                .font(.footnote)
-
+                 .font(.footnote)
             Text("Segments Defined: \(numberOfSegments)")
-                .font(.footnote)
+                 .font(.footnote)
 
-            // --- CONDITIONAL MAPPING CONTROLS --- 
-            if targetNoteOverride == nil {
-                // --- Show FULL controls if NO override --- 
-                
-                // REMOVED: Manual Segment Mapping UI (Picker and Assign Button)
-                /*
-                Text("Manual Segment Mapping").font(.headline)
-                Picker("Select Segment", selection: $selectedSegmentIndex) {
-                     Text("None").tag(nil as Int?)
-                     ForEach(0..<numberOfSegments, id: \.self) { index in
-                         Text("Segment \(index + 1)").tag(index as Int?)
-                     }
-                 }
-                 .pickerStyle(.segmented)
-                 .padding(.bottom, 5)
+            Divider().padding(.vertical, 5)
+            Text("Mapping Options").font(.headline)
 
-                if let segmentIndex = selectedSegmentIndex {
-                    HStack {
-                        Text("Map Segment \(segmentIndex + 1) to:")
-                        Picker("Target MIDI Note", selection: $targetMidiNote) {
-                            ForEach(availablePianoKeys) { key in Text("\(key.name) (\(key.id))").tag(key.id) }
-                        }
-                        .pickerStyle(.menu)
-                        .frame(minWidth: 100).labelsHidden()
-                        Spacer()
-                        Button("Assign Segment") { assignSegmentToNote(segmentIndex: segmentIndex) } // <<< THIS CAUSED THE ERROR
-                            .buttonStyle(.bordered)
-                    }
-                } else {
-                    Text("Select a segment above to map it to a MIDI note.")
-                        .font(.footnote).foregroundColor(.secondary).frame(height: 30)
-                }
-                
-                Divider().padding(.vertical, 5)
-                 */
-                
-                Text("Auto-Mapping (All Segments)").font(.headline)
-                // Sequential Mapping Controls
-                HStack {
-                    Text("Map Sequentially starting at note:")
-                    Picker("Start Note", selection: $autoMapStartNote) {
-                         ForEach(availablePianoKeys) { key in Text("\(key.name) (\(key.id))").tag(key.id) }
-                    }
-                    .frame(width: 120).labelsHidden()
-                    Spacer()
-                    Button("Map Sequentially") {
-                        // Pass viewModel explicitly
-                        autoMapAllSegmentsSequentially(vm: self.viewModel)
-                    }
-                        .buttonStyle(.bordered)
-                        .disabled(markers.isEmpty && numberOfSegments <= 1)
-                }
-                // Velocity Zones / Round Robin (targeting different notes)
-                 HStack {
-                     Text("Map to Velocity Zones on note:")
-                     Picker("Target Note", selection: $targetMidiNote) { // Reuse targetMidiNote state
-                          ForEach(availablePianoKeys) { key in Text("\(key.name) (\(key.id))").tag(key.id) }
-                     }
-                     .frame(width: 120).labelsHidden()
-                     Spacer()
-                     Button("Map Velocity Zones") {
-                         // Pass viewModel explicitly
-                         mapAllSegmentsAsVelocityZones(targetNote: targetMidiNote, vm: self.viewModel)
-                     }
-                         .buttonStyle(.bordered)
-                         .disabled(markers.isEmpty && numberOfSegments <= 1)
-                 }
-                  HStack {
-                     Text("Map as Round Robin on note:")
-                     Picker("Target Note", selection: $targetMidiNote) { // Reuse targetMidiNote state
-                          ForEach(availablePianoKeys) { key in Text("\(key.name) (\(key.id))").tag(key.id) }
-                     }
-                     .frame(width: 120).labelsHidden()
-                     Spacer()
-                     Button("Map Round Robin") {
-                         // Pass viewModel explicitly (when implemented)
-                         mapAllSegmentsAsRoundRobin(targetNote: targetMidiNote, vm: self.viewModel)
-                     }
-                         .buttonStyle(.bordered)
-                         .disabled(markers.isEmpty && numberOfSegments <= 1)
-                 }
-                
-            } else {
-                 // --- Show RESTRICTED controls if override IS set --- 
-                 Text("Map Segments to Note \(targetNoteOverride!)").font(.headline) // Show the target note
-                 HStack {
-                      Button("Map Segments as Velocity Zones") {
-                          // Pass viewModel explicitly
-                          mapAllSegmentsAsVelocityZones(targetNote: targetNoteOverride!, vm: self.viewModel)
-                      }
-                         .buttonStyle(.bordered)
-                         .disabled(markers.isEmpty && numberOfSegments <= 1)
-                      Spacer()
-                      Button("Map Segments as Round Robin") {
-                          // Pass viewModel explicitly (when implemented)
-                          mapAllSegmentsAsRoundRobin(targetNote: targetNoteOverride!, vm: self.viewModel)
-                      }
-                         .buttonStyle(.bordered)
-                         .disabled(markers.isEmpty && numberOfSegments <= 1)
-                 }
-                 .frame(maxWidth: .infinity) // Allow buttons to space out
-             }
-             // --------------------------------------
-
-            Spacer() // Push controls down
-
-            // --- Action Buttons ---
-            HStack {
-                Button("Cancel", role: .cancel) {
-                    dismiss()
-                }
-                Spacer()
-                Button("Done") {
-                    dismiss()
+            // --- CONDITIONAL MAPPING CONTROLS ---
+            if let targetNote = targetNoteOverride {
+                // --- SINGLE NOTE MAPPING (When opened from a specific key) ---
+                Text("Map All Segments to Note: \(SamplerViewModel.noteNumberToName(targetNote)) (\(targetNote))")
+                    .font(.subheadline)
+                Button("Map \(numberOfSegments) Segment\(numberOfSegments == 1 ? "" : "s") to Note \(targetNote)") {
+                    mapAllSegmentsToSingleNote(targetNote: targetNote)
                 }
                 .buttonStyle(.borderedProminent)
-            }
-        }
+                .disabled(isLoadingWaveform || audioFile == nil)
+            } else {
+                // --- MULTI-NOTE MAPPING (When opened from import) ---
+                 VStack(alignment: .leading, spacing: 8) {
+                     // Auto-Map Consecutive
+                     HStack {
+                         Button("Map Consecutively") { mapSegmentsConsecutively() }
+                         .buttonStyle(.bordered)
+                         Text("starting from")
+                         Picker("Start Note", selection: $autoMapStartNote) {
+                             ForEach(availableMidiNoteRange, id: \.self) { note in
+                                 // Call static function
+                                 Text("\(SamplerViewModel.noteNumberToName(note)) (\(note))").tag(note)
+                             }
+                         }
+                         .pickerStyle(.menu).frame(width: 150).labelsHidden()
+                     }
+                     // Velocity Layering
+                     HStack {
+                         Button("Map Velocity Layers") { mapSegmentsAsVelocityLayers() }
+                         .buttonStyle(.bordered)
+                         Text("on note")
+                         Picker("Target Note", selection: $velocityMapTargetNote) {
+                            ForEach(availableMidiNoteRange, id: \.self) { note in
+                                // Call static function
+                                Text("\(SamplerViewModel.noteNumberToName(note)) (\(note))").tag(note)
+                            }
+                         }
+                         .pickerStyle(.menu).frame(width: 150).labelsHidden()
+                     }
+                     // Round Robin
+                     HStack {
+                         Button("Map Round Robin") { mapSegmentsAsRoundRobins() }
+                         .buttonStyle(.bordered)
+                         Text("on note")
+                         Picker("Target Note", selection: $roundRobinTargetNote) {
+                            ForEach(availableMidiNoteRange, id: \.self) { note in
+                                // Call static function
+                                Text("\(SamplerViewModel.noteNumberToName(note)) (\(note))").tag(note)
+                            }
+                         }
+                         .pickerStyle(.menu).frame(width: 150).labelsHidden()
+                     }
+                 }
+                 // Fallback/Quick Map All
+                 Button("Map All Segments to C4 (60)") { mapAllSegmentsToSingleNote(targetNote: 60) }
+                 .padding(.top, 5)
+            } // End else for targetNoteOverride check
+
+            Spacer() // Pushes content to the top
+
+            // --- Dismiss Button ---
+            Button("Done") { dismiss() }
+            .buttonStyle(.bordered)
+            .padding(.bottom)
+
+        } // End Main VStack
         .padding()
-        .frame(minWidth: 550, minHeight: 580)
+        // --- UPDATED ALERT ---
+        .alert("Error", isPresented: $viewModel.showingErrorAlert) { // Bind to viewModel state
+            Button("OK", role: .cancel) {
+                 // Optional: Add action to clear error state if needed
+                 // viewModel.errorAlertMessage = nil // Might be better handled by the view dismissing
+            }
+        } message: {
+            Text(viewModel.errorAlertMessage ?? "An unknown error occurred.") // Use viewModel message
+        }
         .task {
-            // Directly call the async function
-            await loadAudioAndWaveform()
+            print("AudioSegmentEditorView .task started")
+            await loadInitialAudioData()
+            print("AudioSegmentEditorView .task finished")
         }
     }
 
-    // --- Helper Functions ---
+    // MARK: - Async Loading Functions
 
-    // --- UPDATED: Use async/await and extract waveform data --- 
-    @MainActor
-    private func loadAudioAndWaveform() async {
-        print("Loading audio data and waveform for: \(audioFileURL.path)")
-        isLoadingWaveform = true
-        waveformRMSData = []
-        audioFile = nil
-        totalFrames = nil
-        audioInfo = "Loading..."
+    /// Loads the initial audio file info and triggers waveform loading.
+    @MainActor // Ensure state updates happen on the main actor
+    private func loadInitialAudioData() async {
+        print("Executing loadInitialAudioData()")
+        isLoadingWaveform = true // Set loading state
+        audioInfo = "Loading audio..."
 
         do {
+            // Start accessing security-scoped resource if needed
+            let securityScoped = audioFileURL.startAccessingSecurityScopedResource()
+            defer { if securityScoped { audioFileURL.stopAccessingSecurityScopedResource() } }
+
             let file = try AVAudioFile(forReading: audioFileURL)
-            let format = file.processingFormat
-            let frameCount = file.length
+            let frames = file.length
+            let duration = Double(frames) / file.processingFormat.sampleRate
+            let info = String(format: "Duration: %.2f s, Rate: %.1f kHz, Frames: %lld",
+                               duration,
+                               file.processingFormat.sampleRate / 1000,
+                               frames)
 
-            // Basic info update
+            // Update state (safe because we're on MainActor)
             self.audioFile = file
-            self.totalFrames = frameCount
-            let duration = Double(frameCount) / format.sampleRate
-            self.audioInfo = String(format: "Duration: %.2f s | Rate: %.0f Hz | Frames: %lld",
-                                    duration, format.sampleRate, frameCount)
+            self.totalFrames = frames
+            self.audioInfo = info
+            print(" -> Audio info loaded successfully.")
 
-            print("Audio info loaded. Frames: \(frameCount)")
-
-            // --- Extract Waveform Data --- 
-            // Read audio data into a buffer
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)) else {
-                throw NSError(domain: "AudioLoadError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not create buffer"])
-            }
-            try file.read(into: buffer)
-
-            // Calculate RMS or peak samples for display
-            // This is a simplified example - adjust `samplesPerPixel` for performance/detail trade-off
-            let samplesPerPixel = 1024 // Process N samples for each display point
-            let displaySamplesCount = max(1, Int(frameCount) / samplesPerPixel)
-            var rmsSamples = [Float](repeating: 0.0, count: displaySamplesCount)
-
-            guard let floatChannelData = buffer.floatChannelData else {
-                 throw NSError(domain: "AudioLoadError", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not get float channel data"])
-            }
-            // Assuming mono or use first channel
-            let channelData = floatChannelData[0]
-
-            for i in 0..<displaySamplesCount {
-                let startSample = i * samplesPerPixel
-                let endSample = min(startSample + samplesPerPixel, Int(frameCount))
-                let blockSampleCount = endSample - startSample
-
-                if blockSampleCount > 0 {
-                    var sumOfSquares: Float = 0.0
-                    // Sum squares of samples in the block
-                    for j in startSample..<endSample {
-                        let sample = channelData[j]
-                        sumOfSquares += sample * sample
-                    }
-                    // Calculate RMS for the block
-                    let meanSquare = sumOfSquares / Float(blockSampleCount)
-                    rmsSamples[i] = sqrt(meanSquare)
-                } else {
-                    // Handle case where blockSampleCount is 0 (shouldn't happen with max(1,...) above)
-                    rmsSamples[i] = 0.0 
-                }
-            }
-            // --------------------------
-
-            print("Waveform RMS data extracted. Display samples: \(rmsSamples.count)")
-
-            self.waveformRMSData = rmsSamples
-            self.isLoadingWaveform = false
+            // Trigger waveform loading (also needs to be async)
+            await self.loadWaveform()
 
         } catch {
-            let errorMsg = "Error loading audio/waveform: \(error.localizedDescription)"
-            print(errorMsg)
+            let errorMsg = "Error loading audio info: \(error.localizedDescription)"
+            // Update state (safe because we're on MainActor)
             self.audioInfo = errorMsg
+            self.isLoadingWaveform = false // Stop loading on error
+            // Optionally show error alert via ViewModel
+            // viewModel.showError("Failed to load audio file: \(error.localizedDescription)")
+            print(" -> \(errorMsg)")
+        }
+    }
+
+    /// Loads the waveform data for display.
+    @MainActor // Ensure state updates happen on the main actor
+    func loadWaveform() async {
+        guard let file = audioFile else {
+            self.audioInfo = "Error: Audio file ref missing for waveform."
             self.isLoadingWaveform = false
             self.waveformRMSData = []
-            viewModel.showError("Failed to load audio file: \(error.localizedDescription)")
-        }
-    }
-
-    private func addMarker(at point: CGPoint) {
-        guard waveformWidth > 0 else { // Ensure width is calculated
-            print("Cannot add marker: Waveform width not yet available.")
+            print("loadWaveform: Audio file missing.")
             return
         }
-        // Calculate normalized position (0.0 to 1.0)
-        let normalizedPosition = max(0, min(1, point.x / waveformWidth))
+        
+        print("Executing loadWaveform()")
+        // Call ViewModel's function - Expects [Float]?
+        let rmsDataResult = await viewModel.getWaveformRMSData(for: file.url)
 
-        // Avoid adding duplicate markers very close to each other (optional)
-        if !markers.contains(where: { abs($0 - normalizedPosition) < (1 / waveformWidth) }) {
-            markers.append(normalizedPosition)
-            markers.sort() // Keep markers sorted by position
-            print("Added marker at normalized position: \(normalizedPosition)")
+        // Update state (safe because we're on MainActor)
+        if let rmsValues = rmsDataResult {
+            if !rmsValues.isEmpty {
+                self.waveformRMSData = rmsValues // Store data
+                print(" -> Successfully loaded \(rmsValues.count) RMS samples")
+                // Update audioInfo only if successful (overwrites loading message)
+                 let duration = Double(file.length) / file.processingFormat.sampleRate
+                 self.audioInfo = String(format: "Duration: %.2f s, Rate: %.1f kHz, Frames: %lld",
+                                        duration, file.processingFormat.sampleRate / 1000, file.length)
+            } else {
+                self.audioInfo = "Waveform generation resulted in empty data."
+                self.waveformRMSData = []
+                print(" -> Waveform generation resulted in empty data.")
+            }
         } else {
-            print("Marker position too close to existing marker. Ignoring.")
+            self.audioInfo = "Error generating waveform."
+            self.waveformRMSData = []
+            print(" -> Waveform generation failed or returned nil.")
+            viewModel.showError("Failed to generate waveform data.")
         }
+        self.isLoadingWaveform = false
     }
 
-    // --- UPDATED: Calculates X position only ---
-    private func calculateMarkerXPosition(markerValue: Double) -> CGFloat {
-        return markerValue * waveformWidth
+    // MARK: - Coordinate/Frame Conversion Helpers (Moved Out)
+    private func calculateTotalWaveformWidth(viewWidth: CGFloat) -> CGFloat {
+        viewWidth * horizontalZoom
+    }
+    private func calculateCurrentScrollOffsetPoints(viewWidth: CGFloat) -> CGFloat {
+        let totalWidth = calculateTotalWaveformWidth(viewWidth: viewWidth)
+        let excessW = max(0, totalWidth - viewWidth)
+        return excessW * scrollOffsetPercentage
     }
 
-    // --- NEW: Function to handle final drag position update ---
-    private func finalizeMarkerDrag(index: Int, dragTranslation: CGSize) {
-        guard index >= 0 && index < markers.count else { return }
-        guard waveformWidth > 0 else { return }
+    // --- REVERTED: Calculates X position directly from normalized marker value ---
+    private func xPositionForMarker(markerValue: Double, viewWidth: CGFloat, totalWaveformW: CGFloat, scrollOffsetPts: CGFloat) -> CGFloat {
+        let absoluteX = markerValue * totalWaveformW
+        return absoluteX - scrollOffsetPts
+    }
 
-        // Get original position
-        let originalValue = markers[index]
-        let originalX = calculateMarkerXPosition(markerValue: originalValue)
+    // --- REVERTED: Calculates normalized position from view X coordinate ---
+    private func normalizedPositionForViewX(_ xPositionInView: CGFloat, viewWidth: CGFloat, totalWaveformW: CGFloat, scrollOffsetPts: CGFloat) -> Double {
+        guard totalWaveformW > 0 else { return 0.0 } // Avoid division by zero
+        let absoluteX = xPositionInView + scrollOffsetPts
+        let normalizedPosition = absoluteX / totalWaveformW
+        return max(0.0, min(1.0, normalizedPosition)) // Clamp [0.0, 1.0]
+    }
 
-        // Calculate new position based on drag
-        let newX = originalX + dragTranslation.width
-        let newNormalizedValue = max(0, min(1, newX / waveformWidth))
+    // MARK: - Marker Logic (Transient Markers) - UPDATED for Normalized Positions
 
-        // Update the marker's position in the array
-        markers[index] = newNormalizedValue
+    // --- REVERTED: Works with normalized positions ---
+    func addMarker(normalizedPosition: Double, currentViewWidth: CGFloat, totalWaveformWidth: CGFloat) {
+        // Clamp input position just in case
+        let newMarkerValue = max(0.0, min(1.0, normalizedPosition))
 
-        // Re-sort the array after modification
+        // --- Min distance check (using normalized values) ---
+        let minPixelDistance: CGFloat = 5.0
+        let minNormalizedDistance: Double = totalWaveformWidth > 0 ? (minPixelDistance / totalWaveformWidth) : 0.001 // Avoid div by zero
+
+        if markers.contains(where: { abs($0 - newMarkerValue) < minNormalizedDistance }) {
+            print("Marker too close to an existing one (norm distance: \(minNormalizedDistance)).")
+            return
+        }
+        // -----------------------------------------------
+        
+        markers.append(newMarkerValue)
         markers.sort()
+        print("Added marker at normalized position: \(newMarkerValue)")
+        selectedSegmentIndex = nil
+    }
 
+    // --- REVERTED: Works with normalized positions ---
+    func finalizeMarkerDrag(index: Int, originalViewX: CGFloat, dragTranslation: CGSize, currentViewWidth: CGFloat, totalWaveformWidth: CGFloat, scrollOffsetPoints: CGFloat) {
+        guard index >= 0 && index < markers.count else { return }
+        guard totalWaveformWidth > 0 else { return } // Need width for calc
+        
+        // Calculate new view X based on drag
+        let newViewX = originalViewX + dragTranslation.width
+        
+        // Convert new view X back to new normalized position using helper
+        let newNormalizedValue = normalizedPositionForViewX(newViewX, viewWidth: currentViewWidth, totalWaveformW: totalWaveformWidth, scrollOffsetPts: scrollOffsetPoints)
+        
+        markers[index] = newNormalizedValue
+        markers.sort()
         print("Moved marker \(index) to normalized position: \(newNormalizedValue)")
     }
 
-    // --- NEW: Transient Detection Logic ---
+    // --- REVERTED: Works with normalized positions ---
+    func deleteMarker(at index: Int) {
+        guard index >= 0 && index < markers.count else { return }
+        let removedValue = markers.remove(at: index)
+        print("Removed marker at index \(index) (normalized value: \(removedValue)") // Updated log
+        if selectedSegmentIndex == index { selectedSegmentIndex = nil }
+        else if selectedSegmentIndex ?? -1 > index { selectedSegmentIndex! -= 1 }
+    }
 
-    /// Detects transients based on the `transientThreshold` and updates the `markers` state.
-    private func detectAndSetTransients() {
+    // MARK: - Transient Detection (UPDATED Call)
+    func detectAndSetTransients() {
         guard !waveformRMSData.isEmpty else {
-            print("Cannot detect transients: Waveform data not available.")
+            viewModel.showError("Cannot detect transients: Waveform data not loaded.")
             return
         }
-
-        // Invert threshold: Slider goes 0.01 (high sensitivity) to 1.0 (low sensitivity)
-        // We want a *lower* internal threshold for *higher* sensitivity.
-        // A simple inversion like (1.0 - threshold) can work. Adjust range/scaling as needed.
-        let internalThreshold = 1.0 - transientThreshold
-        print("Detecting transients with internal threshold: \(internalThreshold) (Slider: \(transientThreshold))")
-
-        let detectedMarkers = findTransients(in: waveformRMSData, threshold: Float(internalThreshold))
-
-        print("Detected \(detectedMarkers.count) transients.")
-        // Replace existing markers with detected ones
-        self.markers = detectedMarkers
-        self.selectedSegmentIndex = nil // Deselect any selected segment
-    }
-
-    /// Analyzes waveform data to find transient points.
-    /// - Parameter data: Array of RMS or similar amplitude values.
-    /// - Parameter threshold: Sensitivity threshold (lower value detects more).
-    /// - Returns: An array of normalized marker positions (0.0 to 1.0).
-    private func findTransients(in data: [Float], threshold: Float) -> [Double] {
-        guard data.count > 1 else { return [] }
-
-        var transientPositions: [Double] = []
-        let dataCount = data.count
-        let minEnergyThreshold: Float = 0.005 // Ignore very low energy changes
-
-        // Calculate differences between consecutive RMS values
-        var differences: [Float] = []
-        for i in 0..<(dataCount - 1) {
-            let diff = abs(data[i+1] - data[i])
-            differences.append(diff)
+        guard let totalAudioFrames = self.totalFrames, totalAudioFrames > 0 else {
+            viewModel.showError("Cannot detect transients: Total audio frame count is missing.")
+            return
         }
+        // samplesPerPixel is no longer needed for the detectTransients call itself
 
-        // Find the maximum difference for normalization (optional but good)
-        guard let maxDifference = differences.max(), maxDifference > 0 else {
-            print("No significant differences found in RMS data.")
-            return [] // No differences to analyze
-        }
+        Task {
+            do {
+                print("Starting transient detection with threshold: \(transientThreshold)...")
+                // --- Ensure samplesPerPixel argument is REMOVED here ---
+                let detectedNormalizedPositions = try viewModel.detectTransients(
+                    rmsData: waveformRMSData,
+                    threshold: Float(transientThreshold),
+                    totalFrames: totalAudioFrames // Pass for context/validation within ViewModel
+                )
+                // ----------------------------------------------------------
 
-        print("Max RMS difference: \(maxDifference)")
-
-        // Detect peaks in the differences that exceed the threshold
-        for i in 0..<differences.count {
-            let normalizedDiff = differences[i] / maxDifference // Normalize difference
-
-            // Check if the normalized difference exceeds the threshold
-            // AND if the energy at this point is above a minimum threshold
-            if normalizedDiff > threshold && data[i+1] > minEnergyThreshold {
-
-                // Add a marker slightly *before* the detected rise (at index i)
-                let normalizedPosition = Double(i) / Double(dataCount - 1) // Normalize index
-
-                // Avoid adding markers too close to each other (simple debounce)
-                let minDistance: Double = 0.01 // e.g., 1% of waveform width
-                if let lastMarker = transientPositions.last {
-                    if (normalizedPosition - lastMarker) < minDistance {
-                        // print("Skipping transient too close to previous one at \(normalizedPosition)")
-                        continue // Skip if too close
-                    }
+                DispatchQueue.main.async {
+                    self.markers = detectedNormalizedPositions.sorted() // Assign [Double] directly
+                    print("Detected and set \(self.markers.count) transient markers (normalized positions).")
+                    self.selectedSegmentIndex = nil
                 }
+            } catch {
+                DispatchQueue.main.async {
+                    // --- Improved Error Logging ---
+                    let nsError = error as NSError
+                    let errorMessage = "Transient detection failed: \(error.localizedDescription) (Domain: \(nsError.domain), Code: \(nsError.code), UserInfo: \(nsError.userInfo))"
+                    print("Transient detection error detailed: \(errorMessage)")
+                    // -----------------------------
 
-                 // Add a small offset to place marker slightly before the detected point if needed
-                // let offset = -0.005 // e.g., shift back 0.5%
-                // let finalPosition = max(0.0, min(1.0, normalizedPosition + offset))
-
-                let finalPosition = max(0.0, min(1.0, normalizedPosition)) // Use original position for now
-
-                transientPositions.append(finalPosition)
-                // print("Transient detected at index \(i), normalized: \(finalPosition)")
+                    // FIXED: Use showError for consistency
+                    // Display a slightly simpler message to the user
+                    viewModel.showError("Transient detection failed: \(error.localizedDescription)")
+                }
             }
         }
-
-        // Ensure markers are sorted
-        transientPositions.sort()
-        return transientPositions
     }
 
-    // --- End Transient Detection Logic ---
+    // MARK: - Mapping Logic (UPDATED)
 
-    // MODIFIED: Accept ViewModel as parameter
-    private func autoMapAllSegmentsSequentially(vm: SamplerViewModel) {
-        guard targetNoteOverride == nil else { return } // Should only be callable in full editor mode
-        let segments = calculateSegments() // Use corrected function
-        guard !segments.isEmpty else {
-             vm.showError("Cannot map: No segments defined (add markers first).")
-             return
-         }
-        print("View: Requesting auto-mapping of \(segments.count) segments sequentially starting at \(autoMapStartNote)")
-        // Use passed vm instance to call the *correct* ViewModel function
-        vm.autoMapSegmentsSequentially(segments: segments, startNote: self.autoMapStartNote, sourceURL: self.audioFileURL)
-        dismiss()
-    }
-    
-    // MODIFIED: Accept ViewModel as parameter
-    private func mapAllSegmentsAsVelocityZones(targetNote: Int, vm: SamplerViewModel) {
-        let segments = calculateSegments() // Use corrected function
-        guard !segments.isEmpty else {
-             vm.showError("Cannot map: No segments defined (add markers first).")
-             return
-         }
-        print("View: Requesting mapping of \(segments.count) segments as velocity zones to note \(targetNote)")
-        // Use passed vm instance to call the *correct* ViewModel function
-        vm.addSegmentsToNote(segments: segments, midiNote: targetNote, sourceURL: self.audioFileURL)
-        dismiss()
-    }
-    
-    // MODIFIED: Accept ViewModel as parameter
-    private func mapAllSegmentsAsRoundRobin(targetNote: Int, vm: SamplerViewModel) {
-        let segments = calculateSegments() // Use corrected function
-        guard !segments.isEmpty else {
-             vm.showError("Cannot map: No segments defined (add markers first).")
-             return
-         }
-        print("View: Requesting mapping of \(segments.count) segments as round robin to note \(targetNote)")
-        // Use passed vm instance to call the ViewModel function (when implemented)
-        vm.mapSegmentsAsRoundRobin(segments: segments, midiNote: targetNote, sourceURL: self.audioFileURL)
-        dismiss()
-    }
-
-    // --- CORRECTED: calculateSegments --- 
-    /// Calculates the normalized start and end points (0.0 to 1.0) for each segment based on the sorted `markers` array.
-    /// - Returns: An array of tuples `(start: Double, end: Double)`. Returns an empty array if audio not loaded or no segments possible.
-    private func calculateSegments() -> [(start: Double, end: Double)] {
-        // Requires audio to be loaded to determine segment count, though totalFrames isn't directly used here anymore
-        guard let _ = audioFile, !isLoadingWaveform else {
-            print("Warning: calculateSegments called before audio loaded.")
+    // --- REVERTED & CORRECTED: Calculates segment boundaries as frame indices from Double markers ---
+    func getSegmentBoundaries() -> [(start: Int64, end: Int64)] {
+        guard let totalAudioFrames = totalFrames, totalAudioFrames > 0 else {
+            print("Warning: Cannot get segment boundaries without totalFrames.")
             return []
         }
         
-        var segmentRanges: [(start: Double, end: Double)] = [] // Array to store results
-        let sortedMarkers = markers.sorted() // Ensure markers are sorted (should already be)
-
-        // Determine segment boundaries
-        var lastMarkerPos: Double = 0.0
-        for markerPos in sortedMarkers {
-            // Ensure segment has positive length and positions are valid
-            if markerPos > lastMarkerPos && markerPos <= 1.0 && lastMarkerPos >= 0.0 {
-                segmentRanges.append((start: lastMarkerPos, end: markerPos))
+        var segments: [(start: Int64, end: Int64)] = []
+        var lastMarkerValue: Double = 0.0
+        
+        for markerValue in markers.sorted() {
+            // Ensure markerValue is valid and greater than the last
+            guard markerValue > lastMarkerValue && markerValue <= 1.0 && lastMarkerValue >= 0.0 else {
+                print("Warning: Skipping invalid or zero-length segment boundary near normalized value \(markerValue)")
+                lastMarkerValue = max(lastMarkerValue, markerValue) // Avoid getting stuck
+                continue
             }
-            lastMarkerPos = markerPos
-        }
-
-        // Add the last segment (from the last marker to the end)
-        if lastMarkerPos < 1.0 && lastMarkerPos >= 0.0 { // Check lastMarkerPos validity
-            segmentRanges.append((start: lastMarkerPos, end: 1.0))
+            
+            // Convert normalized boundaries to frame indices
+            let startFrame = Int64(lastMarkerValue * Double(totalAudioFrames))
+            let endFrame = Int64(markerValue * Double(totalAudioFrames))
+            
+            // Ensure frame indices result in a valid segment (start < end)
+            if endFrame > startFrame {
+                 segments.append((start: startFrame, end: endFrame))
+            } else {
+                 print("Warning: Segment boundaries resulted in zero/negative length frames: [\(startFrame)-\(endFrame)] from norm [\(lastMarkerValue)-\(markerValue)]. Skipping.")
+            }
+            lastMarkerValue = markerValue
         }
         
-        // Handle the edge case of NO markers (results in one segment covering the whole file)
-        if sortedMarkers.isEmpty {
-            segmentRanges.append((start: 0.0, end: 1.0))
+        // Add the last segment (from the last marker to the end of the file)
+        if lastMarkerValue < 1.0 && lastMarkerValue >= 0.0 {
+            let startFrame = Int64(lastMarkerValue * Double(totalAudioFrames))
+            let endFrame = totalAudioFrames // End is exclusive for frames
+            if endFrame > startFrame {
+                segments.append((start: startFrame, end: endFrame))
+            }
         }
-
-        print("Calculated \(segmentRanges.count) segments: \(segmentRanges)")
-        return segmentRanges
+        
+        // Handle the edge case of NO markers (one segment for the whole file)
+        if markers.isEmpty {
+            segments.append((start: 0, end: totalAudioFrames))
+        }
+        
+        print("Calculated \(segments.count) segment boundaries (frames): \(segments.map { "[\($0.start)-\($0.end)]" }.joined(separator: ", "))")
+        return segments
     }
-    // -----------------------------------
-}
 
-// --- Preview ---
+    // Updated to accept frame indices
+    func createMultiSampleParts(from segmentBoundaries: [(start: Int64, end: Int64)],
+                                mapFunction: (Int, (start: Int64, end: Int64)) -> (note: Int, velocity: VelocityRangeData, rrIndex: Int?)?
+                               ) -> [MultiSamplePartData] {
+        guard let fileUrl = audioFile?.url, let totalFrames = self.totalFrames, totalFrames > 0 else {
+            viewModel.showError("Audio file information not available for mapping.")
+            return []
+        }
+        var partsToAdd: [MultiSamplePartData] = []
+        for (index, segment) in segmentBoundaries.enumerated() {
+             guard let mapResult = mapFunction(index, segment) else { continue }
+             let startSample = segment.start // Use directly
+             let endSample = segment.end     // Use directly
+             guard startSample < endSample else { continue }
+             // Clamping might not be strictly needed if boundaries are correct, but keep for safety
+             let finalStartSample = max(0, startSample)
+             let finalEndSample = min(totalFrames, endSample)
+             guard finalStartSample < finalEndSample else { continue }
+
+            let part = MultiSamplePartData(
+                name: fileUrl.deletingPathExtension().lastPathComponent + "_Part\(index+1)",
+                keyRangeMin: mapResult.note,
+                keyRangeMax: mapResult.note,
+                velocityRange: mapResult.velocity,
+                sourceFileURL: fileUrl,
+                segmentStartSample: finalStartSample,
+                segmentEndSample: finalEndSample,
+                roundRobinIndex: mapResult.rrIndex,
+                relativePath: nil,
+                absolutePath: fileUrl.path,
+                originalAbsolutePath: fileUrl.path,
+                originalFileFrameCount: totalFrames
+            )
+            partsToAdd.append(part)
+            print(" -> Prepared Part \(index + 1): Note=\(mapResult.note), Vel=[\(mapResult.velocity.min)-\(mapResult.velocity.max)], RR=\(mapResult.rrIndex ?? -1), Frames=\(finalStartSample)-\(finalEndSample)")
+        }
+        return partsToAdd
+    }
+    
+    // Mapping functions (mapAllSegments..., mapSegments...) now call the updated createMultiSampleParts
+    // They should work correctly as long as createMultiSampleParts uses frame indices properly
+    func mapAllSegmentsToSingleNote(targetNote: Int) {
+        let segmentBoundaries = getSegmentBoundaries() // Returns [(Int64, Int64)]
+        guard !segmentBoundaries.isEmpty else { /* ... */ return }
+        print("Mapping \(segmentBoundaries.count) segments to note \(targetNote)...")
+        let parts = createMultiSampleParts(from: segmentBoundaries) { index, segment in
+            return (note: targetNote, velocity: .fullRange, rrIndex: nil)
+        }
+        if !parts.isEmpty {
+            viewModel.addMultiSampleParts(parts)
+            print("Added \(parts.count) parts to ViewModel for note \(targetNote).")
+            dismiss()
+        } else { /* ... */ }
+    }
+     func mapSegmentsConsecutively() {
+         let segmentBoundaries = getSegmentBoundaries()
+         guard !segmentBoundaries.isEmpty else { /* ... */ return }
+         print("Mapping \(segmentBoundaries.count) segments consecutively starting from note \(autoMapStartNote)...")
+         let parts = createMultiSampleParts(from: segmentBoundaries) { index, segment in
+             let targetNote = autoMapStartNote + index
+             guard targetNote <= 127 else { return nil }
+             return (note: targetNote, velocity: .fullRange, rrIndex: nil)
+         }
+         if !parts.isEmpty {
+             viewModel.addMultiSampleParts(parts)
+             print("Added \(parts.count) consecutively mapped parts to ViewModel.")
+             dismiss()
+         } else { /* ... */ }
+     }
+     func mapSegmentsAsVelocityLayers() {
+          let segmentBoundaries = getSegmentBoundaries()
+          let numberOfSegments = segmentBoundaries.count
+          guard numberOfSegments > 0 else { /* ... */ return }
+          print("Mapping \(numberOfSegments) segments as velocity layers on note \(velocityMapTargetNote)...")
+          let velocityRanges = viewModel.calculateSeparateVelocityRanges(numberOfFiles: numberOfSegments)
+          guard velocityRanges.count == numberOfSegments else { /* ... */ return }
+          let parts = createMultiSampleParts(from: segmentBoundaries) { index, segment in
+              return (note: velocityMapTargetNote, velocity: velocityRanges[index], rrIndex: nil)
+          }
+          if !parts.isEmpty {
+              viewModel.addMultiSampleParts(parts)
+              print("Added \(parts.count) velocity layer parts to ViewModel for note \(velocityMapTargetNote).")
+              dismiss()
+          } else { /* ... */ }
+      }
+      func mapSegmentsAsRoundRobins() {
+          let segmentBoundaries = getSegmentBoundaries()
+          let numberOfSegments = segmentBoundaries.count
+          guard numberOfSegments > 0 else { /* ... */ return }
+          print("Mapping \(numberOfSegments) segments as round robins on note \(roundRobinTargetNote)...")
+          let parts = createMultiSampleParts(from: segmentBoundaries) { index, segment in
+              return (note: roundRobinTargetNote, velocity: .fullRange, rrIndex: index)
+          }
+          if !parts.isEmpty {
+              viewModel.addMultiSampleParts(parts)
+              viewModel.setMappingMode(.roundRobin)
+              print("Added \(parts.count) round robin parts to ViewModel for note \(roundRobinTargetNote).")
+              dismiss()
+          } else { /* ... */ }
+      }
+} // End struct
+
+
+// --- Previews --- (Keep as is)
 struct AudioSegmentEditorView_Previews: PreviewProvider {
     static var previews: some View {
-        // --- FIX: Correct guard let usage ---
-        // Use nil-coalescing operator ?? to provide the fallback URL
-        let dummyURL = Bundle.main.url(forResource: "TestSound", withExtension: "wav")
-                      ?? URL(fileURLWithPath: "/System/Library/Sounds/Ping.aiff")
-
-        // The guard is no longer needed here as dummyURL is guaranteed to be non-nil
-        // by the fallback. If even the fallback might fail (e.g., invalid path),
-        // you might structure it differently, but for these typical cases, this is fine.
-        // guard let urlToUse = dummyURL else { ... }
-
-        let dummyViewModel = SamplerViewModel()
-
-        return AudioSegmentEditorView(audioFileURL: dummyURL)
-            .environmentObject(dummyViewModel)
-            .previewLayout(.sizeThatFits)
-            .eraseToAnyView()
+        let dummyURL = URL(fileURLWithPath: "/path/to/dummy/audio.wav")
+        let viewModel = SamplerViewModel()
+        AudioSegmentEditorView(audioFileURL: dummyURL)
+            .environmentObject(viewModel)
+            .previewDisplayName("Editor - No Override")
+        AudioSegmentEditorView(audioFileURL: dummyURL, targetNoteOverride: 60)
+            .environmentObject(viewModel)
+            .previewDisplayName("Editor - Target C4")
     }
 }
-
-// Helper to erase type for preview
-extension View {
-    func eraseToAnyView() -> AnyView {
-        AnyView(self)
-    }
-} 
