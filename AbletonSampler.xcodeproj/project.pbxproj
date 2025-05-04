@@ -9,13 +9,9 @@
 /* Begin PBXBuildFile section */
 		DD1C16742DB808250097B59A /* PianoKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1C16732DB808250097B59A /* PianoKeyboardView.swift */; };
 		DD1C16762DB809460097B59A /* SampleDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1C16752DB809460097B59A /* SampleDetailView.swift */; };
-		DD1C16782DBA518B0097B59A /* WaveformDisplayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1C16772DBA518B0097B59A /* WaveformDisplayView.swift */; };
-		DD1C167A2DBA931E0097B59A /* AddSampleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1C16792DBA931E0097B59A /* AddSampleView.swift */; };
 		DD3CB6AE2DB6D7D1009B2C5C /* MIDIManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD3CB6AC2DB6D7D1009B2C5C /* MIDIManager.swift */; };
 		DD3CB6AF2DB6D7D1009B2C5C /* MIDIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD3CB6AD2DB6D7D1009B2C5C /* MIDIView.swift */; };
 		DD3CB6B12DB6E367009B2C5C /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD3CB6B02DB6E367009B2C5C /* KeyboardView.swift */; };
-		DD70F4442DB7FE3F0054E2B2 /* AudioKit in Frameworks */ = {isa = PBXBuildFile; productRef = DD70F4432DB7FE3F0054E2B2 /* AudioKit */; };
-		DD70F4462DB7FE4F0054E2B2 /* AudioKitUI in Frameworks */ = {isa = PBXBuildFile; productRef = DD70F4452DB7FE4F0054E2B2 /* AudioKitUI */; };
 		DD7A8D3F2DB56B6400B3363E /* AbletonSamplerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D3E2DB56B6400B3363E /* AbletonSamplerApp.swift */; };
 		DD7A8D412DB56B6400B3363E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D402DB56B6400B3363E /* ContentView.swift */; };
 		DD7A8D432DB56B6600B3363E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DD7A8D422DB56B6600B3363E /* Assets.xcassets */; };
@@ -26,6 +22,8 @@
 		DD7A8D6A2DB56B8500B3363E /* SamplerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D692DB56B8500B3363E /* SamplerViewModel.swift */; };
 		DD7A8D712DB59B2000B3363E /* AudioSegmentEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D702DB59B2000B3363E /* AudioSegmentEditorView.swift */; };
 		DD7A8D762DB5B40F00B3363E /* PianoKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D752DB5B40F00B3363E /* PianoKeyboardView.swift */; };
+		DDB394AC2DBAFEDB00A63019 /* AudioKitUI in Frameworks */ = {isa = PBXBuildFile; productRef = DDB394AB2DBAFEDB00A63019 /* AudioKitUI */; };
+		DDB394AE2DBAFEE300A63019 /* AudioKit in Frameworks */ = {isa = PBXBuildFile; productRef = DDB394AD2DBAFEE300A63019 /* AudioKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -48,8 +46,6 @@
 /* Begin PBXFileReference section */
 		DD1C16732DB808250097B59A /* PianoKeyboardView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PianoKeyboardView.swift; sourceTree = "<group>"; };
 		DD1C16752DB809460097B59A /* SampleDetailView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SampleDetailView.swift; sourceTree = "<group>"; };
-		DD1C16772DBA518B0097B59A /* WaveformDisplayView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WaveformDisplayView.swift; sourceTree = "<group>"; };
-		DD1C16792DBA931E0097B59A /* AddSampleView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AddSampleView.swift; sourceTree = "<group>"; };
 		DD3CB6AC2DB6D7D1009B2C5C /* MIDIManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MIDIManager.swift; sourceTree = "<group>"; };
 		DD3CB6AD2DB6D7D1009B2C5C /* MIDIView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MIDIView.swift; sourceTree = "<group>"; };
 		DD3CB6B02DB6E367009B2C5C /* KeyboardView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = KeyboardView.swift; sourceTree = "<group>"; };
@@ -74,8 +70,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DD70F4462DB7FE4F0054E2B2 /* AudioKitUI in Frameworks */,
-				DD70F4442DB7FE3F0054E2B2 /* AudioKit in Frameworks */,
+				DDB394AE2DBAFEE300A63019 /* AudioKit in Frameworks */,
+				DDB394AC2DBAFEDB00A63019 /* AudioKitUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -127,8 +123,6 @@
 		DD7A8D3D2DB56B6400B3363E /* AbletonSampler */ = {
 			isa = PBXGroup;
 			children = (
-				DD1C16792DBA931E0097B59A /* AddSampleView.swift */,
-				DD1C16772DBA518B0097B59A /* WaveformDisplayView.swift */,
 				DD1C16752DB809460097B59A /* SampleDetailView.swift */,
 				DD1C16732DB808250097B59A /* PianoKeyboardView.swift */,
 				DD3CB6AC2DB6D7D1009B2C5C /* MIDIManager.swift */,
@@ -188,8 +182,8 @@
 			);
 			name = AbletonSampler;
 			packageProductDependencies = (
-				DD70F4432DB7FE3F0054E2B2 /* AudioKit */,
-				DD70F4452DB7FE4F0054E2B2 /* AudioKitUI */,
+				DDB394AB2DBAFEDB00A63019 /* AudioKitUI */,
+				DDB394AD2DBAFEE300A63019 /* AudioKit */,
 			);
 			productName = AbletonSampler;
 			productReference = DD7A8D3B2DB56B6400B3363E /* AbletonSampler.app */;
@@ -313,10 +307,8 @@
 				DD1C16742DB808250097B59A /* PianoKeyboardView.swift in Sources */,
 				DD3CB6B12DB6E367009B2C5C /* KeyboardView.swift in Sources */,
 				DD7A8D412DB56B6400B3363E /* ContentView.swift in Sources */,
-				DD1C167A2DBA931E0097B59A /* AddSampleView.swift in Sources */,
 				DD3CB6AF2DB6D7D1009B2C5C /* MIDIView.swift in Sources */,
 				DD3CB6AE2DB6D7D1009B2C5C /* MIDIManager.swift in Sources */,
-				DD1C16782DBA518B0097B59A /* WaveformDisplayView.swift in Sources */,
 				DD7A8D6A2DB56B8500B3363E /* SamplerViewModel.swift in Sources */,
 				DD1C16762DB809460097B59A /* SampleDetailView.swift in Sources */,
 				DD7A8D712DB59B2000B3363E /* AudioSegmentEditorView.swift in Sources */,
@@ -662,15 +654,15 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		DD70F4432DB7FE3F0054E2B2 /* AudioKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = DD7A8D6D2DB59A0B00B3363E /* XCRemoteSwiftPackageReference "AudioKit" */;
-			productName = AudioKit;
-		};
-		DD70F4452DB7FE4F0054E2B2 /* AudioKitUI */ = {
+		DDB394AB2DBAFEDB00A63019 /* AudioKitUI */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = DD7A8D722DB59DA700B3363E /* XCRemoteSwiftPackageReference "AudioKitUI" */;
 			productName = AudioKitUI;
+		};
+		DDB394AD2DBAFEE300A63019 /* AudioKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DD7A8D6D2DB59A0B00B3363E /* XCRemoteSwiftPackageReference "AudioKit" */;
+			productName = AudioKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

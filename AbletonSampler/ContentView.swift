@@ -16,22 +16,6 @@ struct SegmentationRequestInfo: Identifiable {
 }
 // ---------------------------------------------------------------------
 
-// --- NEW: Enum to manage what detail view to show --- 
-enum DetailPresentationState: Identifiable {
-    case none
-    case showingSample(id: UUID)
-    case addingSample(note: Int)
-
-    var id: String {
-        switch self {
-        case .none: return "none"
-        case .showingSample(let id): return "sample_\(id)"
-        case .addingSample(let note): return "add_\(note)"
-        }
-    }
-}
-// -------------------------------------------------------
-
 struct ContentView: View {
     // Use @StateObject for the initial creation and ownership in the main view
     // if this ContentView is the root where the ViewModel is created.
@@ -45,14 +29,20 @@ struct ContentView: View {
     // Define grid layout
     let columns: [GridItem] = Array(repeating: .init(.flexible()), count: 12) // 12 columns for notes 0-11
 
-    // --- State for Selected Note/Sample/Add --- 
-    // Make the state Optional for .sheet(item:)
-    @State private var detailPresentation: DetailPresentationState? = nil
-    // -------------------------------------------
+    // --- State for Selected Note --- 
+    @State private var selectedNoteForDetailView: Int? = nil
+    // ------------------------------
 
     // --- State for Audio Segment Editor --- 
-    @State private var fileURLForEditor: URL? = nil
+    @State private var fileURLForEditor: URL? = nil // Uses .sheet(item: $fileURLForEditor)
     @State private var editorDropTargeted: Bool = false
+
+    // --- State for Detail View's Segmentation Request (REPLACED) --- 
+    // @State private var showingDetailSegmentationSheet: Bool = false
+    // @State private var detailSegmentationURL: URL? = nil
+    // @State private var detailSegmentationNote: Int? = nil
+    @State private var segmentationRequestInfo: SegmentationRequestInfo? = nil // Use item-based sheet
+    // ---------------------------------------------------------------------
 
     // --- State for MIDI Destination (currently unused in UI) ---
     @State private var selectedMidiDestinationEndpoint: MIDIEndpointRef? = nil
@@ -66,9 +56,35 @@ struct ContentView: View {
                 
                 Spacer() // Push title and drop zone apart
                 
-                // --- Use the extracted editor drop zone view --- 
-                editorDropZoneView
-                // ---------------------------------------------------
+                // --- Smaller Drop Target for Audio Segment Editor --- 
+                VStack {
+                    // Simplified content for smaller area
+                    HStack {
+                        Image(systemName: "waveform.path.badge.plus")
+                            .font(.title3)
+                        Text("Drop WAV to Edit Segments")
+                            .font(.caption) // Smaller font
+                    }
+                }
+                .frame(width: 250, height: 50) // Reduced size
+                .background(editorDropTargeted ? Color.accentColor : Color.secondary.opacity(0.2))
+                .cornerRadius(8) // Slightly smaller radius
+                .padding(.vertical, 5) // Add some vertical padding within HStack
+                .onDrop(of: [UTType.fileURL], isTargeted: $editorDropTargeted) { providers, _ -> Bool in
+                    // Ensure only single file drops are handled here
+                    guard providers.count == 1 else { 
+                        viewModel.showError("Please drop only a single WAV file here.")
+                        return false 
+                    }
+                    return handleEditorDrop(providers: providers)
+                }
+                // Add visual feedback on hover for the drop zone
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(editorDropTargeted ? Color.white : Color.clear, lineWidth: 2)
+                )
+                .animation(.easeInOut(duration: 0.1), value: editorDropTargeted)
+                // -----------------------------------------------------
 
             }
             .padding(.horizontal) // Padding for the whole HStack
@@ -78,37 +94,43 @@ struct ContentView: View {
 
             // --- Piano Roll --- 
             PianoKeyboardView(keys: $viewModel.pianoKeys) { selectedKeyId in
-                // --- UPDATED LOGIC: Set detailPresentation state (non-nil to show sheet) --- 
-                 if let firstPartID = viewModel.multiSampleParts.first(where: { $0.keyRangeMin == selectedKeyId })?.id {
-                     self.detailPresentation = .showingSample(id: firstPartID)
-                     print("Selected Key: \(selectedKeyId), Found Sample Part ID: \(firstPartID). Setting state to .showingSample")
-                 } else {
-                     self.detailPresentation = .addingSample(note: selectedKeyId)
-                     print("Selected Key: \(selectedKeyId), No samples found. Setting state to .addingSample")
-                 }
+                self.selectedNoteForDetailView = selectedKeyId
             }
             .frame(height: 250)
+            .environmentObject(viewModel)
             .padding(.bottom)
 
             Divider()
 
-            // --- Conditionally Display Placeholder --- 
-            // Check if detailPresentation is nil
-            if detailPresentation == nil {
-                 Text("Click a key to view/add samples.")
+            // --- Conditionally Display Sample Details --- 
+            if let selectedNote = selectedNoteForDetailView {
+                let samplesForNote = viewModel.multiSampleParts.filter { $0.keyRangeMin == selectedNote }
+                SampleDetailView(midiNote: selectedNote, samples: samplesForNote) { url, note in
+                    // Action called by SampleDetailView's drop zone
+                    print("ContentView: Requesting segmentation sheet for \(url.lastPathComponent) on note \(note)")
+                    // Set the state variable to trigger the item-based sheet
+                    self.segmentationRequestInfo = SegmentationRequestInfo(url: url, note: note)
+                    // REMOVED: These are no longer needed
+                    // self.detailSegmentationURL = url
+                    // self.detailSegmentationNote = note
+                    // self.showingDetailSegmentationSheet = true
+                }
+                .environmentObject(viewModel)
+                .padding(.horizontal)
+                .padding(.top) 
+            } else {
+                 Text("Click a key on the piano roll to see sample details.")
                      .foregroundColor(.secondary)
                      .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                // Show status based on the non-nil state (which is about to trigger the sheet)
-                // Use optional chaining or force unwrap safely if needed, but description should handle it
-                Text("Key \(detailPresentation!.description) selected...") 
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             
-            // --- Save Button --- 
-            Spacer() // Pushes save button to the bottom
-            Button("Save ADV File") { 
+            // --- REMOVED Original Drop Target Position --- 
+            // VStack { ... Drop Single WAV File Here ... } was here
+            // --- ------------------------------------- ---
+
+            // --- Save Button (Now pushed down by SampleDetailView or Spacer) --- 
+            Spacer() // Add spacer to push save button down if detail view is short or absent
+            Button("Save ADV File") {
                 print("Save ADV File button tapped")
                 viewModel.saveAdvFile()
             }
@@ -117,86 +139,68 @@ struct ContentView: View {
 
         } // End of main VStack
         .frame(minWidth: 800, minHeight: 750)
-        // --- Apply Alerts and Sheets to the main VStack --- 
+        // Alert for showing save/compression errors
         .alert("Error", isPresented: $viewModel.showingErrorAlert, presenting: viewModel.errorAlertMessage) { _ in
             Button("OK", role: .cancel) { }
         } message: { message in
             Text(message)
         }
+        // --- Corrected Alert for choosing velocity split mode ---
         .alert("Multiple Files Dropped", isPresented: $viewModel.showingVelocitySplitPrompt,
-               presenting: viewModel.pendingDropInfo) { dropInfo in 
-            Button("Separate Zones") { viewModel.processMultiDrop(mode: .separate) }
-            Button("Velocity Crossfades") { viewModel.processMultiDrop(mode: .crossfade) }
-            Button("Round Robin") { viewModel.processMultiDropAsRoundRobin() }
-            Button("Cancel", role: .cancel) { viewModel.pendingDropInfo = nil }
+               presenting: viewModel.pendingDropInfo) { dropInfo in // Corrected: Use viewModel.pendingDropInfo (Data?)
+            // --- Action Buttons ---
+            Button("Separate Zones") {
+                viewModel.processMultiDrop(mode: .separate)
+            }
+            Button("Velocity Crossfades") {
+                viewModel.processMultiDrop(mode: .crossfade)
+            }
+            Button("Round Robin") {
+                viewModel.processMultiDropAsRoundRobin()
+            }
+            Button("Cancel", role: .cancel) {
+                viewModel.pendingDropInfo = nil // Clear pending info on cancel
+            }
+            // Ensure NO other statements are here - implicit return of Buttons
         } message: { dropInfo in
-            let noteNameString = viewModel.pianoKeys.first { $0.id == dropInfo.midiNote }?.name ?? "Note \(dropInfo.midiNote)"
+            // --- Message View --- 
+            let noteNameString = viewModel.pianoKeys.first { $0.id == dropInfo.midiNote }?.name ?? "Note \\(dropInfo.midiNote)"
+            // Debug logging kept for now
+            // print("DEBUG ALERT: dropInfo.midiNote = \\(dropInfo.midiNote)")
+            // print("DEBUG ALERT: noteNameString = \\(noteNameString)")
             Text("You dropped \(dropInfo.fileURLs.count) files onto \(noteNameString). How should the velocity range be split?")
         }
+        // --- Sheet for MAIN Audio Segment Editor --- 
         .sheet(item: $fileURLForEditor, onDismiss: { print("Main editor sheet dismissed.") }) { url in
             // Present normal editor (no targetNoteOverride)
             AudioSegmentEditorView(audioFileURL: url, targetNoteOverride: nil)
                 .environmentObject(viewModel)
         }
-        // --- Sheet for Detail Presentation State (now using Binding<DetailPresentationState?>) --- 
-        .sheet(item: $detailPresentation) { state in // state is non-nil DetailPresentationState here
-            // Sheet modifier handles setting detailPresentation back to nil on dismiss.
-            
-            switch state {
-            case .showingSample(let id):
-                // Find index safely using the captured ID
-                if let selectedIndex = viewModel.multiSampleParts.firstIndex(where: { $0.id == id }) {
-                    SampleDetailView(samplePart: $viewModel.multiSampleParts[selectedIndex])
-                        .environmentObject(viewModel) // Pass environment object
-                } else {
-                    // Should not happen if state logic is correct, but handle gracefully
-                    Text("Error: Sample part with ID \(id) not found.")
-                        .padding()
-                }
-            case .addingSample(let note):
-                AddSampleView(midiNoteNumber: note)
-                    .environmentObject(viewModel) // Pass environment object
-            case .none:
-                // This case should not be presented by .sheet(item:), 
-                // but is required for exhaustiveness.
-                EmptyView()
+        // --- Sheet for DETAIL VIEW Segmentation Request (MODIFIED) --- 
+        .sheet(item: $segmentationRequestInfo, onDismiss: {
+            print("Detail segmentation sheet dismissed.")
+        }) { info in // The 'info' here is the non-nil SegmentationRequestInfo
+            // Present editor with targetNoteOverride set using data from 'info'
+            AudioSegmentEditorView(audioFileURL: info.url, targetNoteOverride: info.note)
+                .environmentObject(viewModel)
+            // REMOVED: No need for the if-let check or fallback text anymore
+            /*
+            // Ensure URL and Note are available before presenting
+            if let url = detailSegmentationURL, let note = detailSegmentationNote {
+                // Present editor with targetNoteOverride set
+                AudioSegmentEditorView(audioFileURL: url, targetNoteOverride: note)
+                    .environmentObject(viewModel)
+            } else {
+                // Fallback view if state is somehow inconsistent (shouldn't happen)
+                Text("Error: Missing data for segment editor.")
             }
+             */
         }
-        /* REMOVED: Item-based sheet for segmentationRequestInfo */
+        // Removed the duplicate midiNoteName function from ContentView scope
+        // Removed the KeyZoneView struct as it's no longer used
     }
 
-    // --- Extracted Editor Drop Zone View --- 
-    @ViewBuilder
-    private var editorDropZoneView: some View {
-        VStack {
-            HStack {
-                Image(systemName: "waveform.path.badge.plus")
-                    .font(.title3)
-                Text("Drop WAV to Edit Segments")
-                    .font(.caption) // Smaller font
-            }
-        }
-        .frame(width: 250, height: 50) // Reduced size
-        .background(editorDropTargeted ? Color.accentColor : Color.secondary.opacity(0.2))
-        .cornerRadius(8) // Slightly smaller radius
-        .padding(.vertical, 5) // Add some vertical padding within HStack
-        .onDrop(of: [UTType.fileURL], isTargeted: $editorDropTargeted) { providers, _ -> Bool in
-            guard providers.count == 1 else { 
-                viewModel.showError("Please drop only a single WAV file here.")
-                return false 
-            }
-            return handleEditorDrop(providers: providers)
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(editorDropTargeted ? Color.white : Color.clear, lineWidth: 2)
-        )
-        .animation(.easeInOut(duration: 0.1), value: editorDropTargeted)
-        // Note: .sheet modifiers moved to the main VStack
-    }
-    // -----------------------------------------
-    
-    // --- Drop Handler for the Editor Zone --- 
+    // --- Drop Handler for the Editor Zone ---
     private func handleEditorDrop(providers: [NSItemProvider]) -> Bool {
         // We already ensured providers.count == 1 in the onDrop closure
         guard let provider = providers.first else {
@@ -255,18 +259,6 @@ struct ContentView: View {
         return true
     }
 }
-
-// --- NEW: Add description to DetailPresentationState for debugging --- 
-extension DetailPresentationState: CustomStringConvertible {
-    var description: String {
-        switch self {
-        case .none: return "None"
-        case .showingSample(let id): return "Showing Sample \(id.uuidString.prefix(8))"
-        case .addingSample(let note): return "Adding Sample to Note \(note)"
-        }
-    }
-}
-// ---------------------------------------------------------------------
 
 // Preview for development
 struct ContentView_Previews: PreviewProvider {

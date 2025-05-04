@@ -3,7 +3,6 @@ import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers // Needed for UTType
 import Foundation // Needed for Process, Pipe, FileManager, URL
-import AudioKit
 
 // MARK: - Piano Key Data Structure (Moved OUTSIDE ViewModel class)
 
@@ -80,8 +79,8 @@ func generatePianoKeys() -> [PianoKey] {
 /// Represents the calculated velocity range for a sample part
 struct VelocityRangeData: Hashable {
     // Note: Using Int for simplicity, matching the XML values (0-127)
-    var min: Int // Changed from let
-    var max: Int // Changed from let
+    let min: Int
+    let max: Int
     let crossfadeMin: Int
     let crossfadeMax: Int
 
@@ -102,13 +101,12 @@ struct MultiSamplePartData: Identifiable, Hashable {
 
     let id = UUID() // Unique identifier for SwiftUI lists etc.
     var name: String
-    var keyRangeMin: Int // Changed from let - MIDI note number
-    var keyRangeMax: Int // Changed from let - MIDI note number (same as min for single key mapping)
+    let keyRangeMin: Int // MIDI note number
+    let keyRangeMax: Int // MIDI note number (same as min for single key mapping)
     var velocityRange: VelocityRangeData
     let sourceFileURL: URL // Original URL of the audio file containing the segment
     var segmentStartSample: Int64 // Start frame within the source file
     var segmentEndSample: Int64 // End frame (exclusive) within the source file. Must be provided.
-    var roundRobinIndex: Int? // NEW: Optional index for round robin playback
 
     // --- Path Information (refers to the source file) ---
     var relativePath: String? // Path relative to the 'Samples/Imported' directory (for the source file)
@@ -196,19 +194,15 @@ class SamplerViewModel: ObservableObject {
     /// NEW: Tracks the current mapping mode to influence XML generation (e.g., for Round Robin).
     @Published var currentMappingMode: MappingMode = .standard
 
-    // --- State (Internal) ---
-    @Published private var waveformCache: [URL: [Float]] = [:]
-
     // --- Initialization ---
 
     init() {
         print("SamplerViewModel initialized.")
-        // Keep cache clear for testing
-        self.waveformCache = [:]
-        print("Waveform cache cleared.")
+        // Initialize piano keys first using the global function
         self.pianoKeys = generatePianoKeys()
+        // Now update their status based on any initially loaded multiSampleParts (currently none)
         updatePianoKeySampleStatus()
-        print("Initialized \(pianoKeys.count) piano keys.")
+        print("Initialized \\(pianoKeys.count) piano keys.")
     }
 
     // MARK: - Piano Key State Update (NEW)
@@ -219,7 +213,7 @@ class SamplerViewModel: ObservableObject {
          // Use a Set for efficient lookup of mapped MIDI notes
          let mappedNotes = Set(multiSampleParts.map { $0.keyRangeMin })
 
-         print("Updating piano key sample status. Mapped notes: \(mappedNotes)")
+         print("Updating piano key sample status. Mapped notes: \\(mappedNotes)")
 
          // Create a new array to avoid direct modification issues with @Published during iteration
          var updatedKeys = self.pianoKeys
@@ -233,7 +227,7 @@ class SamplerViewModel: ObservableObject {
              if keyCurrentlyHasSample != shouldHaveSample {
                  updatedKeys[i].hasSample = shouldHaveSample
                  changesMade = true
-                 print(" -> Key \(keyMidiNote) ('\(updatedKeys[i].name)') status changed to \(shouldHaveSample)")
+                 print(" -> Key \\(keyMidiNote) ('\\(updatedKeys[i].name)') status changed to \\(shouldHaveSample)")
              }
          }
 
@@ -320,7 +314,7 @@ class SamplerViewModel: ObservableObject {
             self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
             self.multiSampleParts.append(partData)
             // `multiSampleParts` didSet will trigger updatePianoKeySampleStatus()
-            print("Added single sample part: \(partData.name) to key \(midiNote)")
+            print("Added single sample part: \\(partData.name) to key \\(midiNote)")
         }
     }
 
@@ -409,7 +403,7 @@ class SamplerViewModel: ObservableObject {
             self.pendingDropInfo = nil
             self.showingVelocitySplitPrompt = false
             // `multiSampleParts` didSet will trigger updatePianoKeySampleStatus()
-            print("Finished processing multi-drop. Added \(newParts.count) parts.")
+            print("Finished processing multi-drop. Added \\(newParts.count) parts.")
         }
     }
 
@@ -438,7 +432,7 @@ class SamplerViewModel: ObservableObject {
              return
         }
 
-        // --- Prepare Parts (no velocity calc needed) ---
+        // --- Prepare Parts (no velocity calc needed) --- 
         var newPartsData: [MultiSamplePartData] = []
         for (index, fileURL) in fileURLs.enumerated() {
             guard let metadata = extractAudioMetadata(fileURL: fileURL) else {
@@ -467,12 +461,12 @@ class SamplerViewModel: ObservableObject {
             print("Prepared RR part \(index + 1)/\(numberOfFiles): \(partData.name) for key \(midiNote)")
         }
 
-        // --- Add Parts and Update State ---
+        // --- Add Parts and Update State --- 
         DispatchQueue.main.async {
             self.objectWillChange.send()
             // First, clear *all* existing parts for the target note before adding RR samples.
             // This prevents mixing velocity-split and RR samples on the same key.
-            print("Clearing existing parts on note \(midiNote) before adding Round Robin samples.")
+            print("Clearing existing parts on note \\(midiNote) before adding Round Robin samples.")
             var partsRemoved = false
             let initialCount = self.multiSampleParts.count
             self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
@@ -497,7 +491,7 @@ class SamplerViewModel: ObservableObject {
 
             // Explicitly trigger update if parts were removed but none added, or if parts were added.
             // The didSet on multiSampleParts handles the update, but logging completion here.
-             print("Finished processing multi-drop for Round Robin. Added \(newPartsData.count) parts.")
+             print("Finished processing multi-drop for Round Robin. Added \\(newPartsData.count) parts.")
              // If parts were only removed, the didSet might not have triggered if newPartsData was empty.
              // Calling update explicitly ensures correctness in that edge case.
              if partsRemoved && newPartsData.isEmpty {
@@ -637,62 +631,6 @@ class SamplerViewModel: ObservableObject {
         return AudioMetadata(sampleRate: sampleRate, frameCount: frameCount, fileSize: fileSize, lastModDate: lastModDate)
     }
 
-
-    // MARK: - Waveform Data Extraction & Caching (REVERTED)
-    /// Asynchronously retrieves or calculates RMS waveform data for display.
-    /// Uses a cache to avoid redundant calculations.
-    /// - Parameter fileURL: The URL of the audio file.
-    /// - Returns: An optional array of Float values representing RMS data, or nil on failure.
-    @MainActor
-    func getWaveformRMSData(for fileURL: URL) async -> [Float]? { // REVERTED Return Type
-        // 1. Check Cache
-        if let cachedData = waveformCache[fileURL] { // REVERTED Cache Check
-            print("Waveform Cache HIT for: \(fileURL.lastPathComponent)")
-            return cachedData
-        }
-        
-        print("Waveform Cache MISS for: \(fileURL.lastPathComponent). Calculating...")
-        let securityScoped = fileURL.startAccessingSecurityScopedResource()
-        defer { if securityScoped { fileURL.stopAccessingSecurityScopedResource() } }
-        
-        do {
-            let audioFile = try AVAudioFile(forReading: fileURL)
-            let frameCount = audioFile.length
-            guard frameCount > 0 else { return nil }
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: audioFile.processingFormat, frameCapacity: AVAudioFrameCount(frameCount)) else { return nil }
-            try audioFile.read(into: buffer)
-
-            // --- Calculate RMS Samples (REVERTED to fixed samplesPerPixel) ---
-            let samplesPerPixel = 1024 // Reverted to original value
-            let displaySamplesCount = max(1, Int(frameCount) / samplesPerPixel)
-            print("  -> Using fixed samplesPerPixel: \(samplesPerPixel), Actual RMS Samples: \(displaySamplesCount)")
-            var rmsSamples = [Float](repeating: 0.0, count: displaySamplesCount)
-            guard let floatChannelData = buffer.floatChannelData else { return nil }
-            let channelData = floatChannelData[0]
-
-            for i in 0..<displaySamplesCount {
-                let startSample = i * samplesPerPixel
-                let endSample = min(startSample + samplesPerPixel, Int(frameCount))
-                let blockSampleCount = endSample - startSample
-                if blockSampleCount > 0 {
-                    var sumOfSquares: Float = 0.0
-                    for j in startSample..<endSample { sumOfSquares += channelData[j] * channelData[j] }
-                    rmsSamples[i] = sqrt(sumOfSquares / Float(blockSampleCount))
-                } else { rmsSamples[i] = 0.0 }
-            }
-            // -----------------------------------------------------------------
-            
-            print("  -> Waveform calculation successful. Display samples: \(rmsSamples.count)")
-            
-            // Store [Float] in cache
-            waveformCache[fileURL] = rmsSamples
-            return rmsSamples // Return [Float]?
-
-        } catch {
-            print("  -> Error calculating waveform for \(fileURL.lastPathComponent): \(error)")
-            return nil
-        }
-    }
 
     // MARK: - Mapping Mode Control (NEW)
 
@@ -1189,212 +1127,211 @@ class SamplerViewModel: ObservableObject {
     }
 
 
-    // MARK: - Sample Part Management (CRUD Operations)
+    // MARK: - Segment Processing Logic (Moved from Editor)
 
-    /// Adds multiple `MultiSamplePartData` objects to the main array.
-    /// Ensures the update happens on the main thread.
-    func addMultiSampleParts(_ partsToAdd: [MultiSamplePartData]) {
-        DispatchQueue.main.async {
-            // Using objectWillChange manually before appending can be slightly safer
-            // if updates are complex, though didSet should handle this.
-            self.objectWillChange.send()
-            self.multiSampleParts.append(contentsOf: partsToAdd)
-            print("Added \(partsToAdd.count) new sample parts.")
-            // updatePianoKeySampleStatus() is called automatically by didSet
+    /// Adds multiple sample parts based on segments, mapping them to velocity zones on a single note.
+    /// Called from AudioSegmentEditorView.
+    func addSegmentsToNote(segments: [(start: Double, end: Double)], midiNote: Int, sourceURL: URL) {
+        print("ViewModel: Adding \\(segments.count) segments from \\(sourceURL.lastPathComponent) to velocity zones on note \\(midiNote).")
+
+        // First, get the necessary metadata for frame conversion
+        guard let metadata = extractAudioMetadata(fileURL: sourceURL), let totalFrames = metadata.frameCount, totalFrames > 0 else {
+            showError("Could not read metadata or file is empty for \\(sourceURL.lastPathComponent).")
+            return
         }
-    }
 
-    /// Removes a sample part by its ID.
-    func removeMultiSamplePart(id: UUID) {
-        DispatchQueue.main.async {
-            self.objectWillChange.send()
-            let initialCount = self.multiSampleParts.count
-            self.multiSampleParts.removeAll { $0.id == id }
-            if self.multiSampleParts.count < initialCount {
-                print("Removed sample part with ID: \(id)")
-            } else {
-                print("Could not remove sample part: ID \(id) not found.")
+        // --- Clear existing samples for the target note --- 
+        // Use objectWillChange to ensure UI updates correctly, especially if only removing.
+        DispatchQueue.main.async { self.objectWillChange.send() } 
+        let initialCount = multiSampleParts.count
+        multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
+        if multiSampleParts.count < initialCount {
+             print("ViewModel: Removed \\(initialCount - multiSampleParts.count) existing sample(s) for note \\(midiNote).")
+        }
+        // --------------------------------------------------
+
+        // Set mapping mode to standard when mapping velocity zones
+        setMappingMode(.standard)
+
+        // --- Create new parts with calculated velocity ranges --- 
+        let velocityRanges = calculateSeparateVelocityRanges(numberOfFiles: segments.count)
+        guard velocityRanges.count == segments.count else {
+            print("ViewModel Error: Mismatch count for velocity ranges.")
+            showError("Internal error calculating velocity ranges.")
+            return
+        }
+
+        var newParts: [MultiSamplePartData] = []
+        for (index, segment) in segments.enumerated() {
+            // Convert normalized segment times (0.0-1.0) to sample frames
+            let startFrame = Int64(segment.start * Double(totalFrames))
+            let endFrame = Int64(segment.end * Double(totalFrames))
+
+            // Basic validation for the calculated frames
+            guard startFrame < endFrame, endFrame <= totalFrames else {
+                print("ViewModel Warning: Invalid segment frame range [\\(startFrame)-\\(endFrame)] for file \\(sourceURL.lastPathComponent). Skipping segment \\(index).")
+                continue
             }
+            
+            let segmentPart = MultiSamplePartData(
+                name: "\\(sourceURL.deletingPathExtension().lastPathComponent)_SegVel\\(index+1)",
+                keyRangeMin: midiNote,
+                keyRangeMax: midiNote,
+                velocityRange: velocityRanges[index], // Assign calculated velocity range
+                sourceFileURL: sourceURL,
+                segmentStartSample: startFrame,
+                segmentEndSample: endFrame,
+                relativePath: nil, // Will be set on save
+                absolutePath: sourceURL.path,
+                originalAbsolutePath: sourceURL.path,
+                sampleRate: metadata.sampleRate,
+                fileSize: metadata.fileSize,
+                lastModDate: metadata.lastModDate,
+                originalFileFrameCount: totalFrames
+            )
+            newParts.append(segmentPart)
+        }
+
+        // Add all new parts on the main thread
+        DispatchQueue.main.async {
+             self.multiSampleParts.append(contentsOf: newParts)
+             print("ViewModel: Successfully added \\(newParts.count) segments as velocity zones to note \\(midiNote).")
+             // The didSet on multiSampleParts will trigger the UI update
+         }
+    }
+
+    /// Adds multiple sample parts based on segments, mapping them sequentially across MIDI notes.
+    /// Called from AudioSegmentEditorView.
+    func autoMapSegmentsSequentially(segments: [(start: Double, end: Double)], startNote: Int, sourceURL: URL) {
+        print("ViewModel: Auto-mapping \\(segments.count) segments sequentially from note \\(startNote) using \\(sourceURL.lastPathComponent).")
+        guard !segments.isEmpty else { return }
+
+        // Get metadata first
+        guard let metadata = extractAudioMetadata(fileURL: sourceURL), let totalFrames = metadata.frameCount, totalFrames > 0 else {
+            showError("Could not read metadata or file is empty for \\(sourceURL.lastPathComponent).")
+            return
+        }
+
+        // --- Determine notes to clear and prepare new parts --- 
+        var newParts: [MultiSamplePartData] = []
+        var notesToClear: Set<Int> = []
+
+        for (index, segment) in segments.enumerated() {
+            let targetNote = startNote + index
+            guard targetNote <= 127 else {
+                print("ViewModel Warning: Reached max MIDI note (127). Stopping sequential mapping.")
+                break // Stop if we exceed MIDI range
+            }
+            
+            notesToClear.insert(targetNote)
+
+            // Convert normalized segment times to frames
+            let startFrame = Int64(segment.start * Double(totalFrames))
+            let endFrame = Int64(segment.end * Double(totalFrames))
+            guard startFrame < endFrame, endFrame <= totalFrames else {
+                print("ViewModel Warning: Invalid segment [\\(segment.start)-\\(segment.end)] for sequential map. Skipping segment \\(index).")
+                continue
+            }
+
+            let segmentPart = MultiSamplePartData(
+                name: "\\(sourceURL.deletingPathExtension().lastPathComponent)_SeqMap\\(index+1)",
+                keyRangeMin: targetNote,
+                keyRangeMax: targetNote,
+                velocityRange: .fullRange, // Full velocity range for sequential mapping
+                sourceFileURL: sourceURL,
+                segmentStartSample: startFrame,
+                segmentEndSample: endFrame,
+                relativePath: nil, // Set on save
+                absolutePath: sourceURL.path,
+                originalAbsolutePath: sourceURL.path,
+                sampleRate: metadata.sampleRate,
+                fileSize: metadata.fileSize,
+                lastModDate: metadata.lastModDate,
+                originalFileFrameCount: totalFrames
+            )
+            newParts.append(segmentPart)
+        }
+        
+        // --- Apply changes on Main Thread --- 
+        DispatchQueue.main.async {
+            self.objectWillChange.send() // Important before mutation
+            // Remove existing samples for the notes being mapped
+            let initialCount = self.multiSampleParts.count
+            self.multiSampleParts.removeAll { $0.keyRangeMin == $0.keyRangeMax && notesToClear.contains($0.keyRangeMin) }
+            if self.multiSampleParts.count < initialCount {
+                 print("ViewModel: Removed \\(initialCount - self.multiSampleParts.count) existing sample(s) in target sequential range.")
+            }
+            // Add the new parts
+            self.multiSampleParts.append(contentsOf: newParts)
+            self.setMappingMode(.standard) // Sequential mapping implies standard mode
+            print("ViewModel: Successfully auto-mapped \\(newParts.count) segments sequentially starting from note \\(startNote).")
+            // didSet will trigger UI update
         }
     }
 
-    // --- Update a specific MultiSamplePartData (e.g., for segment marker dragging) ---
-    func updateMultiSamplePart(_ updatedPartData: MultiSamplePartData) {
-         DispatchQueue.main.async { // Ensure updates happen on the main thread
-             if let index = self.multiSampleParts.firstIndex(where: { $0.id == updatedPartData.id }) {
-                 // Perform validation before updating
-                 guard let totalFrames = updatedPartData.originalFileFrameCount, totalFrames > 0 else {
-                     print("Error updating part \(updatedPartData.id): Original frame count missing or invalid.")
-                     self.showError("Cannot update sample part: Original file length information is missing.")
-                     return
-                 }
-
-                 // Validate and clamp segment boundaries
-                 let validatedStartSample = max(0, min(updatedPartData.segmentStartSample, totalFrames - 1))
-                 let validatedEndSample = max(validatedStartSample + 1, min(updatedPartData.segmentEndSample, totalFrames)) // Ensure end > start and <= totalFrames
-
-                 // Create the final validated part to store
-                 var finalPart = updatedPartData
-                 finalPart.segmentStartSample = validatedStartSample
-                 finalPart.segmentEndSample = validatedEndSample
-
-                 // Validate velocity range
-                 finalPart.velocityRange.min = max(0, min(updatedPartData.velocityRange.min, 127))
-                 finalPart.velocityRange.max = max(finalPart.velocityRange.min, min(updatedPartData.velocityRange.max, 127))
-                 // TODO: Add validation for velocity crossfade values if they become editable
-
-                 // Validate Note Number
-                 finalPart.keyRangeMin = max(0, min(updatedPartData.keyRangeMin, 127))
-                 finalPart.keyRangeMax = finalPart.keyRangeMin // Keep min/max the same for single note mapping
-
-                 // Update the array
-                 self.multiSampleParts[index] = finalPart
-                 print("Updated MultiSamplePartData for ID: \(updatedPartData.id)")
-                 // No need to manually call updatePianoKeySampleStatus, didSet on multiSampleParts handles it.
-             } else {
-                 print("Error updating part: Could not find MultiSamplePartData with ID: \(updatedPartData.id)")
-                 // Optionally show an error to the user
-                 // self.showError("Failed to save changes: Sample part not found.")
-             }
-         }
-     }
-
-
-    /// Updates only the segment start or end sample for a specific MultiSamplePartData.
-     /// Ensures that start < end and both are within the original file bounds [0, originalFileFrameCount).
-     /// - Parameters:
-     ///   - partID: The UUID of the `MultiSamplePartData` to update.
-     ///   - newStartSample: The proposed new start sample frame. If nil, the start sample is not changed.
-     ///   - newEndSample: The proposed new end sample frame. If nil, the end sample is not changed.
-     func updateSegmentBoundary(partID: UUID, newStartSample: Int64?, newEndSample: Int64?) {
-         DispatchQueue.main.async {
-             guard let index = self.multiSampleParts.firstIndex(where: { $0.id == partID }) else {
-                 print("Error updating segment boundary: Part ID \(partID) not found.")
-                 // self.showError("Could not update segment: Sample part not found.")
-                 return
-             }
-
-             var partToUpdate = self.multiSampleParts[index]
-
-             // Ensure original file frame count is available
-             guard let totalFrames = partToUpdate.originalFileFrameCount, totalFrames > 0 else {
-                 print("Error updating segment boundary for \(partID): Original frame count missing.")
-                 self.showError("Cannot update segment boundaries: Original file length information is missing.")
-                 return
-             }
-
-             // Get current values
-             var currentStart = partToUpdate.segmentStartSample
-             var currentEnd = partToUpdate.segmentEndSample
-
-             // --- Update Start Sample ---
-             if let proposedStart = newStartSample {
-                 // Clamp proposed start: 0 <= proposedStart < totalFrames
-                 let clampedStart = max(0, min(proposedStart, totalFrames - 1))
-                 // Ensure start doesn't go past the *current* end (minus 1 frame minimum length)
-                 currentStart = min(clampedStart, currentEnd - 1)
-                 // Ensure start is still non-negative after potentially being limited by end
-                 currentStart = max(0, currentStart)
-                 print("Updating Start Sample for \(partID): Proposed=\(proposedStart), Clamped=\(clampedStart), Final=\(currentStart)")
-             }
-
-             // --- Update End Sample ---
-             if let proposedEnd = newEndSample {
-                 // Clamp proposed end: 0 < proposedEnd <= totalFrames
-                 // Note: End sample is often treated as *exclusive* in ranges, but here it seems *inclusive* based on XML/Ableton?
-                 // Let's assume it marks the *last* sample frame to include. So max value is totalFrames - 1?
-                 // NO - Ableton ADV XML uses <SampleEnd Value="X"/> which seems to be the frame *after* the last sample.
-                 // Let's stick to: End sample MUST be > Start Sample and End Sample <= totalFrames
-                 let clampedEnd = max(1, min(proposedEnd, totalFrames)) // Clamp: 1 <= proposedEnd <= totalFrames
-                 // Ensure end doesn't go below the *updated* start (plus 1 frame minimum length)
-                 currentEnd = max(currentStart + 1, clampedEnd)
-                 // Ensure end doesn't exceed total frames
-                 currentEnd = min(currentEnd, totalFrames)
-                 print("Updating End Sample for \(partID): Proposed=\(proposedEnd), Clamped=\(clampedEnd), Final=\(currentEnd)")
-             }
-
-             // --- Final Validation ---
-             // Double-check if start somehow ended up >= end after individual updates
-             if currentStart >= currentEnd {
-                 print("Error updating segment boundary for \(partID): Invalid final state (Start=\(currentStart), End=\(currentEnd)). Reverting to previous state.")
-                 // Optionally revert or adjust automatically, for now just log and don't update.
-                 // self.showError("Failed to update segment boundaries due to invalid range.") // Maybe too noisy?
-                 return
-             }
-
-             // Apply the validated updates
-             self.multiSampleParts[index].segmentStartSample = currentStart
-             self.multiSampleParts[index].segmentEndSample = currentEnd
-
-             print("Successfully updated segment boundaries for \(partID): Start=\(currentStart), End=\(currentEnd)")
-             // No need to call updatePianoKeySampleStatus, didSet handles it.
-         }
-     }
-
-    // MARK: - Transient Detection (REVERTED - Modified Normalization)
-
-    /// Detects transients in waveform RMS data.
-    /// Detects transients in waveform RMS data.
-    /// - Parameters:
-    ///   - rmsData: An array of pre-calculated RMS or amplitude values.
-    ///   - threshold: Sensitivity threshold (0.0 to 1.0). Lower value = more sensitive.
-    ///   - totalFrames: The total number of frames in the original audio file (Used for context/validation, but primary calculation uses RMS count).
-    /// - Returns: An array of normalized positions (`Double` from 0.0 to 1.0) where transients were detected.
-    /// - Throws: Potential calculation errors.
-    func detectTransients(rmsData: [Float], threshold: Float, totalFrames: Int64) throws -> [Double] { // Corrected Signature
-        // --- START Correct Function Body ---
-        guard !rmsData.isEmpty else {
-            print("Transient Detection: RMS data is empty.")
-            return []
-        }
-         // samplesPerPixel is no longer used
-         // Keep guard totalFrames > 0 for potential future use or validation.
-         guard totalFrames > 0 else {
-             throw NSError(domain: "SamplerViewModelError", code: 5, userInfo: [NSLocalizedDescriptionKey: "totalFrames must be positive for context."])
-         }
-
-        let dataCount = rmsData.count
-        guard dataCount > 1 else { return [] }
-
-        var transientPositions: [Double] = [] // Store normalized positions
-        let minEnergyThreshold: Float = 0.005
-        let debounceSamples: Int = 2 // Debounce based on RMS sample indices
-        var lastTransientRMSIndex: Int = -debounceSamples // Use correct initial value for debounce
-
-        // Calculate differences between consecutive RMS values
-        var differences: [Float] = []
-        for i in 0..<(dataCount - 1) { differences.append(abs(rmsData[i+1] - rmsData[i])) }
-        guard let maxDifference = differences.max(), maxDifference > 0 else {
-             print("Transient Detection: No significant differences found.")
-             return []
+    // --- NEW: Map Segments as Round Robin from Editor ---
+    /// Adds multiple sample parts based on segments, mapping them as Round Robin parts on a single note.
+    /// Called from AudioSegmentEditorView.
+    func mapSegmentsAsRoundRobin(segments: [(start: Double, end: Double)], midiNote: Int, sourceURL: URL) {
+        print("ViewModel: Mapping \(segments.count) segments as Round Robin from \(sourceURL.lastPathComponent) to note \(midiNote).")
+        guard !segments.isEmpty else {
+            showError("Cannot map: No segments provided.")
+            return
         }
 
-        // Look for peaks in the differences
-        for i in 0..<differences.count { // i is the index *before* the potential peak at i+1
-             let normalizedDiff = differences[i] / maxDifference
-             let peakRMSIndex = i + 1 // The actual peak is at this RMS index
+        // Get metadata first
+        guard let metadata = extractAudioMetadata(fileURL: sourceURL), let totalFrames = metadata.frameCount, totalFrames > 0 else {
+            showError("Could not read metadata or file is empty for \(sourceURL.lastPathComponent). Cannot map Round Robin.")
+            return
+        }
 
-             // Check threshold, minimum energy, and debounce
-             // Use peakRMSIndex for debounce comparison
-             if normalizedDiff > threshold && rmsData[peakRMSIndex] > minEnergyThreshold && peakRMSIndex > (lastTransientRMSIndex + debounceSamples) {
-                 // --- Calculate Normalized Position directly from RMS index ---
-                 // Use dataCount - 1 for correct scaling across points
-                 let normalizedPosition = Double(peakRMSIndex) / Double(dataCount - 1)
-                 // --- END CALCULATION ---
+        // --- Prepare New Parts --- 
+        var newParts: [MultiSamplePartData] = []
+        for (index, segment) in segments.enumerated() {
+            // Convert normalized segment times to frames
+            let startFrame = Int64(segment.start * Double(totalFrames))
+            let endFrame = Int64(segment.end * Double(totalFrames))
+            guard startFrame < endFrame, endFrame <= totalFrames else {
+                print("ViewModel Warning: Invalid segment [\(segment.start)-\(segment.end)] for Round Robin map. Skipping segment \(index).")
+                continue
+            }
 
-                 // Clamp normalized position [0.0, 1.0]
-                 let clampedPosition = max(0.0, min(1.0, normalizedPosition))
-
-                 transientPositions.append(clampedPosition) // Append normalized position
-                 print("  -> Transient Candidate: RMS index=\(peakRMSIndex), NormPos=\(String(format: "%.4f", clampedPosition))")
-                 lastTransientRMSIndex = peakRMSIndex // Update debounce index
-             }
-         }
-
-        print("Transient Detection Complete: Found \(transientPositions.count) transients (normalized positions).")
-        return transientPositions.sorted() // Return sorted [Double]
-        // --- END Correct Function Body ---
+            let segmentPart = MultiSamplePartData(
+                name: "\(sourceURL.deletingPathExtension().lastPathComponent)_RR_Seg\(index+1)", // Indicate RR + Segment
+                keyRangeMin: midiNote,
+                keyRangeMax: midiNote,
+                velocityRange: .fullRange, // Full velocity range for Round Robin parts
+                sourceFileURL: sourceURL,
+                segmentStartSample: startFrame,
+                segmentEndSample: endFrame,
+                relativePath: nil, // Set on save
+                absolutePath: sourceURL.path,
+                originalAbsolutePath: sourceURL.path,
+                sampleRate: metadata.sampleRate,
+                fileSize: metadata.fileSize,
+                lastModDate: metadata.lastModDate,
+                originalFileFrameCount: totalFrames
+            )
+            newParts.append(segmentPart)
+        }
+        
+        // --- Apply changes on Main Thread --- 
+        DispatchQueue.main.async {
+            self.objectWillChange.send() // Important before mutation
+            // Remove existing samples for the target note before adding RR parts
+            let initialCount = self.multiSampleParts.count
+            self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
+            if self.multiSampleParts.count < initialCount {
+                 print("ViewModel: Removed \(initialCount - self.multiSampleParts.count) existing sample(s) on note \(midiNote) before Round Robin mapping.")
+            }
+            // Add the new Round Robin parts
+            self.multiSampleParts.append(contentsOf: newParts)
+            self.setMappingMode(.roundRobin) // Set mode AFTER adding parts
+            print("ViewModel: Successfully mapped \(newParts.count) segments as Round Robin to note \(midiNote). Set mapping mode.")
+            // didSet will trigger UI update
+        }
     }
+    // -----------------------------------------------------
 
     // MARK: - Error Handling
 
@@ -1406,29 +1343,6 @@ class SamplerViewModel: ObservableObject {
             self.showingErrorAlert = true
              print("Error Alert Presented: \(message)") // Log for debugging
         }
-    }
-
-    /// Clears the current error state.
-    func clearError() {
-        DispatchQueue.main.async {
-            self.errorAlertMessage = nil
-            self.showingErrorAlert = false
-            print("Error Alert Cleared.")
-        }
-    }
-
-    // MARK: - Helper Functions
-
-    /// Converts a MIDI note number (0-127) to its standard name (e.g., "C4", "F#3").
-    static func noteNumberToName(_ noteNumber: Int) -> String {
-        guard (0...127).contains(noteNumber) else {
-            return "Invalid"
-        }
-        let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-        let keyIndexInOctave = noteNumber % 12
-        let noteName = noteNames[keyIndexInOctave]
-        let actualOctave = (noteNumber / 12) - 2
-        return "\(noteName)\(actualOctave)"
     }
 }
 
