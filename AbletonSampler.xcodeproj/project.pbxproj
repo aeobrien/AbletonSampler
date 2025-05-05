@@ -12,6 +12,7 @@
 		DD3CB6AE2DB6D7D1009B2C5C /* MIDIManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD3CB6AC2DB6D7D1009B2C5C /* MIDIManager.swift */; };
 		DD3CB6AF2DB6D7D1009B2C5C /* MIDIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD3CB6AD2DB6D7D1009B2C5C /* MIDIView.swift */; };
 		DD3CB6B12DB6E367009B2C5C /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD3CB6B02DB6E367009B2C5C /* KeyboardView.swift */; };
+		DD76A13E2DC8CD8400E00478 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD76A13D2DC8CD8400E00478 /* Models.swift */; };
 		DD7A8D3F2DB56B6400B3363E /* AbletonSamplerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D3E2DB56B6400B3363E /* AbletonSamplerApp.swift */; };
 		DD7A8D412DB56B6400B3363E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7A8D402DB56B6400B3363E /* ContentView.swift */; };
 		DD7A8D432DB56B6600B3363E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DD7A8D422DB56B6600B3363E /* Assets.xcassets */; };
@@ -49,6 +50,7 @@
 		DD3CB6AC2DB6D7D1009B2C5C /* MIDIManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MIDIManager.swift; sourceTree = "<group>"; };
 		DD3CB6AD2DB6D7D1009B2C5C /* MIDIView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MIDIView.swift; sourceTree = "<group>"; };
 		DD3CB6B02DB6E367009B2C5C /* KeyboardView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = KeyboardView.swift; sourceTree = "<group>"; };
+		DD76A13D2DC8CD8400E00478 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		DD7A8D3B2DB56B6400B3363E /* AbletonSampler.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AbletonSampler.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DD7A8D3E2DB56B6400B3363E /* AbletonSamplerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AbletonSamplerApp.swift; sourceTree = "<group>"; };
 		DD7A8D402DB56B6400B3363E /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -123,6 +125,7 @@
 		DD7A8D3D2DB56B6400B3363E /* AbletonSampler */ = {
 			isa = PBXGroup;
 			children = (
+				DD76A13D2DC8CD8400E00478 /* Models.swift */,
 				DD1C16752DB809460097B59A /* SampleDetailView.swift */,
 				DD1C16732DB808250097B59A /* PianoKeyboardView.swift */,
 				DD3CB6AC2DB6D7D1009B2C5C /* MIDIManager.swift */,
@@ -303,6 +306,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DD76A13E2DC8CD8400E00478 /* Models.swift in Sources */,
 				DD7A8D762DB5B40F00B3363E /* PianoKeyboardView.swift in Sources */,
 				DD1C16742DB808250097B59A /* PianoKeyboardView.swift in Sources */,
 				DD3CB6B12DB6E367009B2C5C /* KeyboardView.swift in Sources */,

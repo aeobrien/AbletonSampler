@@ -23,21 +23,21 @@ struct ContentView: View {
     // @EnvironmentObject is correct.
     // Assuming @EnvironmentObject is appropriate based on typical App structure.
     @EnvironmentObject var viewModel: SamplerViewModel // Access the shared view model
-    // --- ADD EnvironmentObject for MIDIManager --- 
+    // --- ADD EnvironmentObject for MIDIManager ---
     @EnvironmentObject var midiManager: MIDIManager
 
     // Define grid layout
     let columns: [GridItem] = Array(repeating: .init(.flexible()), count: 12) // 12 columns for notes 0-11
 
-    // --- State for Selected Note --- 
+    // --- State for Selected Note ---
     @State private var selectedNoteForDetailView: Int? = nil
     // ------------------------------
 
-    // --- State for Audio Segment Editor --- 
+    // --- State for Audio Segment Editor ---
     @State private var fileURLForEditor: URL? = nil // Uses .sheet(item: $fileURLForEditor)
     @State private var editorDropTargeted: Bool = false
 
-    // --- State for Detail View's Segmentation Request (REPLACED) --- 
+    // --- State for Detail View's Segmentation Request (REPLACED) ---
     // @State private var showingDetailSegmentationSheet: Bool = false
     // @State private var detailSegmentationURL: URL? = nil
     // @State private var detailSegmentationNote: Int? = nil
@@ -48,15 +48,15 @@ struct ContentView: View {
     @State private var selectedMidiDestinationEndpoint: MIDIEndpointRef? = nil
 
     var body: some View {
-        VStack(spacing: 0) { 
-            // --- Top Header Row --- 
+        VStack(spacing: 0) {
+            // --- Top Header Row ---
             HStack {
                 Text("Ableton Sampler Patch Builder")
                     .font(.title)
                 
                 Spacer() // Push title and drop zone apart
                 
-                // --- Smaller Drop Target for Audio Segment Editor --- 
+                // --- Smaller Drop Target for Audio Segment Editor ---
                 VStack {
                     // Simplified content for smaller area
                     HStack {
@@ -72,9 +72,9 @@ struct ContentView: View {
                 .padding(.vertical, 5) // Add some vertical padding within HStack
                 .onDrop(of: [UTType.fileURL], isTargeted: $editorDropTargeted) { providers, _ -> Bool in
                     // Ensure only single file drops are handled here
-                    guard providers.count == 1 else { 
+                    guard providers.count == 1 else {
                         viewModel.showError("Please drop only a single WAV file here.")
-                        return false 
+                        return false
                     }
                     return handleEditorDrop(providers: providers)
                 }
@@ -92,7 +92,7 @@ struct ContentView: View {
             .padding(.bottom, 5) // Space below header
             // -------------------------
 
-            // --- Piano Roll --- 
+            // --- Piano Roll ---
             PianoKeyboardView(keys: $viewModel.pianoKeys) { selectedKeyId in
                 self.selectedNoteForDetailView = selectedKeyId
             }
@@ -102,20 +102,19 @@ struct ContentView: View {
 
             Divider()
 
-            // --- Conditionally Display Sample Details --- 
+            // --- Conditionally Display Sample Details ---
             if let selectedNote = selectedNoteForDetailView {
-                let samplesForNote = viewModel.multiSampleParts.filter { $0.keyRangeMin == selectedNote }
-                SampleDetailView(midiNote: selectedNote, samples: samplesForNote) { url, note in
+                // REMOVE: No longer need to pre-filter samples here
+                // let samplesForNote = viewModel.multiSampleParts.filter { $0.keyRangeMin == selectedNote }
+                
+                // UPDATE: Call SampleDetailView with only the necessary parameters
+                SampleDetailView(midiNote: selectedNote) { url, note in
                     // Action called by SampleDetailView's drop zone
-                    print("ContentView: Requesting segmentation sheet for \(url.lastPathComponent) on note \(note)")
+                    print("ContentView: Requesting segmentation sheet for \\(url.lastPathComponent) on note \\(note)")
                     // Set the state variable to trigger the item-based sheet
                     self.segmentationRequestInfo = SegmentationRequestInfo(url: url, note: note)
-                    // REMOVED: These are no longer needed
-                    // self.detailSegmentationURL = url
-                    // self.detailSegmentationNote = note
-                    // self.showingDetailSegmentationSheet = true
                 }
-                .environmentObject(viewModel)
+                // .environmentObject(viewModel) // Redundant as SampleDetailView uses @EnvironmentObject
                 .padding(.horizontal)
                 .padding(.top) 
             } else {
@@ -124,11 +123,11 @@ struct ContentView: View {
                      .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             
-            // --- REMOVED Original Drop Target Position --- 
+            // --- REMOVED Original Drop Target Position ---
             // VStack { ... Drop Single WAV File Here ... } was here
             // --- ------------------------------------- ---
 
-            // --- Save Button (Now pushed down by SampleDetailView or Spacer) --- 
+            // --- Save Button (Now pushed down by SampleDetailView or Spacer) ---
             Spacer() // Add spacer to push save button down if detail view is short or absent
             Button("Save ADV File") {
                 print("Save ADV File button tapped")
@@ -163,20 +162,20 @@ struct ContentView: View {
             }
             // Ensure NO other statements are here - implicit return of Buttons
         } message: { dropInfo in
-            // --- Message View --- 
+            // --- Message View ---
             let noteNameString = viewModel.pianoKeys.first { $0.id == dropInfo.midiNote }?.name ?? "Note \\(dropInfo.midiNote)"
             // Debug logging kept for now
             // print("DEBUG ALERT: dropInfo.midiNote = \\(dropInfo.midiNote)")
             // print("DEBUG ALERT: noteNameString = \\(noteNameString)")
             Text("You dropped \(dropInfo.fileURLs.count) files onto \(noteNameString). How should the velocity range be split?")
         }
-        // --- Sheet for MAIN Audio Segment Editor --- 
+        // --- Sheet for MAIN Audio Segment Editor ---
         .sheet(item: $fileURLForEditor, onDismiss: { print("Main editor sheet dismissed.") }) { url in
             // Present normal editor (no targetNoteOverride)
             AudioSegmentEditorView(audioFileURL: url, targetNoteOverride: nil)
                 .environmentObject(viewModel)
         }
-        // --- Sheet for DETAIL VIEW Segmentation Request (MODIFIED) --- 
+        // --- Sheet for DETAIL VIEW Segmentation Request (MODIFIED) ---
         .sheet(item: $segmentationRequestInfo, onDismiss: {
             print("Detail segmentation sheet dismissed.")
         }) { info in // The 'info' here is the non-nil SegmentationRequestInfo

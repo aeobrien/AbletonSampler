@@ -194,6 +194,12 @@ class SamplerViewModel: ObservableObject {
     /// NEW: Tracks the current mapping mode to influence XML generation (e.g., for Round Robin).
     @Published var currentMappingMode: MappingMode = .standard
 
+    /// NEW: Maps a MIDI Note to the desired number of velocity layers for that note
+    @Published var noteLayerConfiguration: [Int: Int] = [:]
+
+    /// NEW: Maps a MIDI Note to the maximum number of round robin slots for that note
+    @Published var noteRoundRobinConfiguration: [Int: Int] = [:]
+
     // --- Initialization ---
 
     init() {
@@ -280,12 +286,14 @@ class SamplerViewModel: ObservableObject {
     }
 
     /// Processes a single dropped WAV file, creating one MultiSamplePartData.
+    /// This action resets the note configuration to a single layer/RR.
     private func processSingleFileDrop(midiNote: Int, fileURL: URL) {
         guard let metadata = extractAudioMetadata(fileURL: fileURL) else {
-            showError("Could not read metadata for \(fileURL.lastPathComponent).")
+            showError("Could not read metadata for \\(fileURL.lastPathComponent).")
             return
         }
 
+        // Create the single sample part data with full velocity range
         let partData = MultiSamplePartData(
             name: fileURL.deletingPathExtension().lastPathComponent,
             keyRangeMin: midiNote,
@@ -304,12 +312,17 @@ class SamplerViewModel: ObservableObject {
             originalFileFrameCount: metadata.frameCount
         )
 
-        // Add the new part to our main data array
         // Ensure UI updates on the main thread
         DispatchQueue.main.async {
-            // Using objectWillChange manually before appending is good practice
-            // if complex updates might not be automatically detected.
             self.objectWillChange.send()
+
+            // --- Update Configuration ---
+            // A single drop resets the configuration for this note.
+            self.noteLayerConfiguration[midiNote] = 1
+            self.noteRoundRobinConfiguration[midiNote] = 1
+            print("Single Drop: Reset configuration for note \\(midiNote) to 1 layer, 1 RR.")
+
+            // --- Update Sample Parts ---
             // Remove any existing parts for this key before adding the new one
             self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
             self.multiSampleParts.append(partData)
@@ -320,13 +333,12 @@ class SamplerViewModel: ObservableObject {
 
 
     /// Processes multiple dropped files based on the user's chosen velocity split mode.
-    /// This function is called after the user interacts with the velocity split prompt.
+    /// Updates the configuration to match the number of files as layers.
     /// - Parameter mode: The `VelocitySplitMode` selected by the user (.separate or .crossfade).
     func processMultiDrop(mode: VelocitySplitMode) {
-        print("Processing multi-drop with mode: \(mode)")
+        print("Processing multi-drop with mode: \\(mode)")
         guard let info = pendingDropInfo else {
             print("Error: No pending drop info found.")
-            // Clear the prompt state just in case
              DispatchQueue.main.async {
                 self.pendingDropInfo = nil
                 self.showingVelocitySplitPrompt = false
@@ -347,12 +359,12 @@ class SamplerViewModel: ObservableObject {
              return
         }
 
-        // Calculate the velocity ranges based on the chosen mode
+        // Calculate the velocity ranges based on the chosen mode and number of files
         let velocityRanges = calculateVelocityRanges(numberOfFiles: numberOfFiles, mode: mode)
 
         // Ensure we got the correct number of ranges
         guard velocityRanges.count == numberOfFiles else {
-            print("Error: Mismatch between number of files (\(numberOfFiles)) and calculated velocity ranges (\(velocityRanges.count)).")
+            print("Error: Mismatch between number of files (\\(numberOfFiles)) and calculated velocity ranges (\\(velocityRanges.count)).")
             showError("Internal error calculating velocity ranges.")
              DispatchQueue.main.async {
                 self.pendingDropInfo = nil
@@ -366,8 +378,7 @@ class SamplerViewModel: ObservableObject {
         // Create a MultiSamplePartData for each file with its calculated range
         for (index, fileURL) in fileURLs.enumerated() {
             guard let metadata = extractAudioMetadata(fileURL: fileURL) else {
-                print("Warning: Could not read metadata for \(fileURL.lastPathComponent). Skipping this file.")
-                // Optionally inform the user about skipped files
+                print("Warning: Could not read metadata for \\(fileURL.lastPathComponent). Skipping this file.")
                 continue // Skip this file and proceed with others
             }
 
@@ -389,25 +400,35 @@ class SamplerViewModel: ObservableObject {
                 originalFileFrameCount: metadata.frameCount
             )
             newParts.append(partData)
-            print("Prepared multi-sample part \(index + 1)/\(numberOfFiles): \(partData.name) for key \(midiNote) with vel range [\(partData.velocityRange.min)-\(partData.velocityRange.max)]")
+            print("Prepared multi-sample part \\(index + 1)/\\(numberOfFiles): \\(partData.name) for key \\(midiNote) with vel range [\\(partData.velocityRange.min)-\\(partData.velocityRange.max)]")
         }
 
-        // Add the new parts to the main data array and clear pending state
         // Ensure UI updates on the main thread
         DispatchQueue.main.async {
-            // Use objectWillChange for clarity
             self.objectWillChange.send()
+
+            // --- Update Configuration ---
+            // Velocity split sets layers = numFiles, RR = 1.
+            self.noteLayerConfiguration[midiNote] = numberOfFiles
+            self.noteRoundRobinConfiguration[midiNote] = 1
+            self.currentMappingMode = .standard // Ensure standard mapping mode
+            print("Velocity Split Drop: Set configuration for note \\(midiNote) to \\(numberOfFiles) layers, 1 RR.")
+
+            // --- Update Sample Parts ---
              // Remove any existing parts for this key before adding the new ones
             self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
             self.multiSampleParts.append(contentsOf: newParts)
+
+            // --- Cleanup ---
             self.pendingDropInfo = nil
             self.showingVelocitySplitPrompt = false
             // `multiSampleParts` didSet will trigger updatePianoKeySampleStatus()
-            print("Finished processing multi-drop. Added \\(newParts.count) parts.")
+            print("Finished processing multi-drop velocity split. Added \\(newParts.count) parts.")
         }
     }
 
     /// Processes multiple dropped files as Round Robin samples on a single key.
+    /// Updates configuration to 1 layer, N RRs.
     func processMultiDropAsRoundRobin() {
         print("Processing multi-drop as Round Robin...")
         guard let info = pendingDropInfo else {
@@ -432,16 +453,16 @@ class SamplerViewModel: ObservableObject {
              return
         }
 
-        // --- Prepare Parts (no velocity calc needed) --- 
+        // --- Prepare Parts (all get full velocity range) ---
         var newPartsData: [MultiSamplePartData] = []
         for (index, fileURL) in fileURLs.enumerated() {
             guard let metadata = extractAudioMetadata(fileURL: fileURL) else {
-                print("Warning: Could not read metadata for \(fileURL.lastPathComponent). Skipping this file for Round Robin.")
+                print("Warning: Could not read metadata for \\(fileURL.lastPathComponent). Skipping this file for Round Robin.")
                 continue // Skip this file
             }
 
             let partData = MultiSamplePartData(
-                name: fileURL.deletingPathExtension().lastPathComponent + "_RR_\(index + 1)", // Add RR suffix
+                name: fileURL.deletingPathExtension().lastPathComponent + "_RR_\\(index + 1)", // Add RR suffix
                 keyRangeMin: midiNote,
                 keyRangeMax: midiNote,
                 velocityRange: .fullRange, // All files get full velocity range
@@ -458,45 +479,32 @@ class SamplerViewModel: ObservableObject {
                 originalFileFrameCount: metadata.frameCount
             )
             newPartsData.append(partData)
-            print("Prepared RR part \(index + 1)/\(numberOfFiles): \(partData.name) for key \(midiNote)")
+            print("Prepared RR part \\(index + 1)/\\(numberOfFiles): \\(partData.name) for key \\(midiNote)")
         }
 
-        // --- Add Parts and Update State --- 
+        // --- Add Parts and Update State ---
         DispatchQueue.main.async {
             self.objectWillChange.send()
+
+            // --- Update Configuration ---
+            // Round Robin sets layers = 1, RR = numFiles.
+            self.noteLayerConfiguration[midiNote] = 1
+            self.noteRoundRobinConfiguration[midiNote] = numberOfFiles
+            self.currentMappingMode = .roundRobin // Set mapping mode for RR
+            print("Round Robin Drop: Set configuration for note \\(midiNote) to 1 layer, \\(numberOfFiles) RRs. Set mapping mode.")
+
+            // --- Update Sample Parts ---
             // First, clear *all* existing parts for the target note before adding RR samples.
-            // This prevents mixing velocity-split and RR samples on the same key.
-            print("Clearing existing parts on note \\(midiNote) before adding Round Robin samples.")
-            var partsRemoved = false
-            let initialCount = self.multiSampleParts.count
             self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
-            if self.multiSampleParts.count != initialCount {
-                partsRemoved = true
-            }
-
-
             // Add the new Round Robin parts
-            // We are appending directly here for simplicity since addSampleSegment might have complex interactions
-            // we don't need when just adding RR parts after a clear.
             self.multiSampleParts.append(contentsOf: newPartsData)
 
-
-            // Set the global mapping mode
-            self.currentMappingMode = .roundRobin
-            print("Set mapping mode to Round Robin.")
-
-            // Clear pending info and hide prompt
+            // --- Cleanup ---
             self.pendingDropInfo = nil
             self.showingVelocitySplitPrompt = false
 
-            // Explicitly trigger update if parts were removed but none added, or if parts were added.
-            // The didSet on multiSampleParts handles the update, but logging completion here.
              print("Finished processing multi-drop for Round Robin. Added \\(newPartsData.count) parts.")
-             // If parts were only removed, the didSet might not have triggered if newPartsData was empty.
-             // Calling update explicitly ensures correctness in that edge case.
-             if partsRemoved && newPartsData.isEmpty {
-                 self.updatePianoKeySampleStatus()
-             }
+             // The didSet on multiSampleParts handles the piano key update
         }
     }
 
@@ -571,7 +579,8 @@ class SamplerViewModel: ObservableObject {
     // MARK: - Metadata Extraction
 
     /// Helper struct to return multiple metadata values.
-    private struct AudioMetadata {
+    // CHANGE private -> internal (or remove 'private')
+    internal struct AudioMetadata {
         let sampleRate: Double?
         let frameCount: Int64?
         let fileSize: Int64?
@@ -582,7 +591,8 @@ class SamplerViewModel: ObservableObject {
     /// Extracts relevant metadata from an audio file URL.
     /// - Parameter fileURL: The URL of the audio file.
     /// - Returns: An optional `AudioMetadata` struct, or nil if extraction fails.
-    private func extractAudioMetadata(fileURL: URL) -> AudioMetadata? {
+    // CHANGE private -> internal (or just remove 'private')
+    /* private */ func extractAudioMetadata(fileURL: URL) -> AudioMetadata? {
         var sampleRate: Double? = nil
         var frameCount: Int64? = nil
         var fileSize: Int64? = nil
@@ -1130,9 +1140,15 @@ class SamplerViewModel: ObservableObject {
     // MARK: - Segment Processing Logic (Moved from Editor)
 
     /// Adds multiple sample parts based on segments, mapping them to velocity zones on a single note.
+    /// Updates configuration to N layers (N=segments), 1 RR.
     /// Called from AudioSegmentEditorView.
     func addSegmentsToNote(segments: [(start: Double, end: Double)], midiNote: Int, sourceURL: URL) {
         print("ViewModel: Adding \\(segments.count) segments from \\(sourceURL.lastPathComponent) to velocity zones on note \\(midiNote).")
+
+        guard !segments.isEmpty else {
+            showError("Cannot add segments: No segments provided.")
+            return
+        }
 
         // First, get the necessary metadata for frame conversion
         guard let metadata = extractAudioMetadata(fileURL: sourceURL), let totalFrames = metadata.frameCount, totalFrames > 0 else {
@@ -1140,34 +1156,19 @@ class SamplerViewModel: ObservableObject {
             return
         }
 
-        // --- Clear existing samples for the target note --- 
-        // Use objectWillChange to ensure UI updates correctly, especially if only removing.
-        DispatchQueue.main.async { self.objectWillChange.send() } 
-        let initialCount = multiSampleParts.count
-        multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
-        if multiSampleParts.count < initialCount {
-             print("ViewModel: Removed \\(initialCount - multiSampleParts.count) existing sample(s) for note \\(midiNote).")
-        }
-        // --------------------------------------------------
-
-        // Set mapping mode to standard when mapping velocity zones
-        setMappingMode(.standard)
-
-        // --- Create new parts with calculated velocity ranges --- 
+        // Calculate velocity ranges based on the number of segments
         let velocityRanges = calculateSeparateVelocityRanges(numberOfFiles: segments.count)
         guard velocityRanges.count == segments.count else {
-            print("ViewModel Error: Mismatch count for velocity ranges.")
+            print("ViewModel Error: Mismatch count for velocity ranges when adding segments as layers.")
             showError("Internal error calculating velocity ranges.")
             return
         }
 
+        // --- Prepare New Parts ---
         var newParts: [MultiSamplePartData] = []
         for (index, segment) in segments.enumerated() {
-            // Convert normalized segment times (0.0-1.0) to sample frames
             let startFrame = Int64(segment.start * Double(totalFrames))
             let endFrame = Int64(segment.end * Double(totalFrames))
-
-            // Basic validation for the calculated frames
             guard startFrame < endFrame, endFrame <= totalFrames else {
                 print("ViewModel Warning: Invalid segment frame range [\\(startFrame)-\\(endFrame)] for file \\(sourceURL.lastPathComponent). Skipping segment \\(index).")
                 continue
@@ -1186,14 +1187,32 @@ class SamplerViewModel: ObservableObject {
                 originalAbsolutePath: sourceURL.path,
                 sampleRate: metadata.sampleRate,
                 fileSize: metadata.fileSize,
+                crc: nil, // Placeholder
                 lastModDate: metadata.lastModDate,
                 originalFileFrameCount: totalFrames
             )
             newParts.append(segmentPart)
         }
 
-        // Add all new parts on the main thread
+        // --- Apply changes on Main Thread ---
         DispatchQueue.main.async {
+             self.objectWillChange.send()
+
+             // --- Update Configuration ---
+             // Mapping segments to velocity sets layers = numSegments, RR = 1.
+             self.noteLayerConfiguration[midiNote] = segments.count
+             self.noteRoundRobinConfiguration[midiNote] = 1
+             self.currentMappingMode = .standard // Ensure standard mapping mode
+             print("Add Segments as Velocity: Set configuration for note \\(midiNote) to \\(segments.count) layers, 1 RR.")
+
+             // --- Update Sample Parts ---
+             // Clear existing samples for the target note
+             let initialCount = self.multiSampleParts.count
+             self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
+             if self.multiSampleParts.count < initialCount {
+                  print("ViewModel: Removed \\(initialCount - self.multiSampleParts.count) existing sample(s) for note \\(midiNote).")
+             }
+             // Add all new parts
              self.multiSampleParts.append(contentsOf: newParts)
              print("ViewModel: Successfully added \\(newParts.count) segments as velocity zones to note \\(midiNote).")
              // The didSet on multiSampleParts will trigger the UI update
@@ -1201,6 +1220,7 @@ class SamplerViewModel: ObservableObject {
     }
 
     /// Adds multiple sample parts based on segments, mapping them sequentially across MIDI notes.
+    /// Updates configuration for each affected note to 1 layer, 1 RR.
     /// Called from AudioSegmentEditorView.
     func autoMapSegmentsSequentially(segments: [(start: Double, end: Double)], startNote: Int, sourceURL: URL) {
         print("ViewModel: Auto-mapping \\(segments.count) segments sequentially from note \\(startNote) using \\(sourceURL.lastPathComponent).")
@@ -1212,9 +1232,9 @@ class SamplerViewModel: ObservableObject {
             return
         }
 
-        // --- Determine notes to clear and prepare new parts --- 
+        // --- Determine notes to clear and prepare new parts ---
         var newParts: [MultiSamplePartData] = []
-        var notesToClear: Set<Int> = []
+        var notesToUpdateConfig: Set<Int> = [] // Keep track of notes whose config needs reset
 
         for (index, segment) in segments.enumerated() {
             let targetNote = startNote + index
@@ -1223,9 +1243,8 @@ class SamplerViewModel: ObservableObject {
                 break // Stop if we exceed MIDI range
             }
             
-            notesToClear.insert(targetNote)
+            notesToUpdateConfig.insert(targetNote)
 
-            // Convert normalized segment times to frames
             let startFrame = Int64(segment.start * Double(totalFrames))
             let endFrame = Int64(segment.end * Double(totalFrames))
             guard startFrame < endFrame, endFrame <= totalFrames else {
@@ -1252,28 +1271,39 @@ class SamplerViewModel: ObservableObject {
             newParts.append(segmentPart)
         }
         
-        // --- Apply changes on Main Thread --- 
+        // --- Apply changes on Main Thread ---
         DispatchQueue.main.async {
             self.objectWillChange.send() // Important before mutation
+
+            // --- Update Configuration ---
+            // Reset configuration for each affected note to 1 layer, 1 RR.
+            for note in notesToUpdateConfig {
+                self.noteLayerConfiguration[note] = 1
+                self.noteRoundRobinConfiguration[note] = 1
+            }
+            self.currentMappingMode = .standard // Ensure standard mapping mode
+            print("Sequential Map: Reset configuration for \\(notesToUpdateConfig.count) notes to 1 layer, 1 RR.")
+
+            // --- Update Sample Parts ---
             // Remove existing samples for the notes being mapped
             let initialCount = self.multiSampleParts.count
-            self.multiSampleParts.removeAll { $0.keyRangeMin == $0.keyRangeMax && notesToClear.contains($0.keyRangeMin) }
+            self.multiSampleParts.removeAll { $0.keyRangeMin == $0.keyRangeMax && notesToUpdateConfig.contains($0.keyRangeMin) } // Use notesToUpdateConfig here
             if self.multiSampleParts.count < initialCount {
                  print("ViewModel: Removed \\(initialCount - self.multiSampleParts.count) existing sample(s) in target sequential range.")
             }
             // Add the new parts
             self.multiSampleParts.append(contentsOf: newParts)
-            self.setMappingMode(.standard) // Sequential mapping implies standard mode
             print("ViewModel: Successfully auto-mapped \\(newParts.count) segments sequentially starting from note \\(startNote).")
             // didSet will trigger UI update
         }
     }
 
-    // --- NEW: Map Segments as Round Robin from Editor ---
+    // --- NEW: Map Segments as Round Robin from Editor --- // Comment seems old, function exists
     /// Adds multiple sample parts based on segments, mapping them as Round Robin parts on a single note.
+    /// Updates configuration to 1 layer, N RRs (N=segments).
     /// Called from AudioSegmentEditorView.
-    func mapSegmentsAsRoundRobin(segments: [(start: Double, end: Double)], midiNote: Int, sourceURL: URL) {
-        print("ViewModel: Mapping \(segments.count) segments as Round Robin from \(sourceURL.lastPathComponent) to note \(midiNote).")
+    func mapSegmentsAsRoundRobin(segments: [(start: Double, end: Double)], midiNote: Int, sourceURL: URL, targetLayerIndex: Int) {
+        print("ViewModel: Mapping \\(segments.count) segments as Round Robin from \\(sourceURL.lastPathComponent) to note \\(midiNote), target layer index \\(targetLayerIndex).")
         guard !segments.isEmpty else {
             showError("Cannot map: No segments provided.")
             return
@@ -1281,26 +1311,41 @@ class SamplerViewModel: ObservableObject {
 
         // Get metadata first
         guard let metadata = extractAudioMetadata(fileURL: sourceURL), let totalFrames = metadata.frameCount, totalFrames > 0 else {
-            showError("Could not read metadata or file is empty for \(sourceURL.lastPathComponent). Cannot map Round Robin.")
+            showError("Could not read metadata or file is empty for \\(sourceURL.lastPathComponent). Cannot map Round Robin.")
             return
         }
 
-        // --- Prepare New Parts --- 
+        // --- Calculate Target Velocity Range ---
+        let numLayers = noteLayerConfiguration[midiNote] ?? 1 // Get current layer count
+        guard targetLayerIndex >= 0 && targetLayerIndex < numLayers else {
+             print("ViewModel Error: Invalid targetLayerIndex (\\(targetLayerIndex)) for \\(numLayers) configured layers on note \\(midiNote).")
+             showError("Cannot map Round Robin: Invalid target layer selected.")
+             return
+         }
+        let layerRanges = calculateSeparateVelocityRanges(numberOfFiles: numLayers)
+        guard targetLayerIndex < layerRanges.count else {
+             print("ViewModel Error: Could not calculate velocity range for target layer index \\(targetLayerIndex).")
+             showError("Internal error calculating velocity range for Round Robin mapping.")
+             return
+         }
+        let targetVelocityRange = layerRanges[targetLayerIndex]
+        print("  -> Mapping RR segments to velocity range: [\\(targetVelocityRange.min)-\\(targetVelocityRange.max)]")
+
+        // --- Prepare New Parts ---
         var newParts: [MultiSamplePartData] = []
         for (index, segment) in segments.enumerated() {
-            // Convert normalized segment times to frames
             let startFrame = Int64(segment.start * Double(totalFrames))
             let endFrame = Int64(segment.end * Double(totalFrames))
             guard startFrame < endFrame, endFrame <= totalFrames else {
-                print("ViewModel Warning: Invalid segment [\(segment.start)-\(segment.end)] for Round Robin map. Skipping segment \(index).")
+                print("ViewModel Warning: Invalid segment [\\(segment.start)-\\(segment.end)] for Round Robin map. Skipping segment \\(index).")
                 continue
             }
 
             let segmentPart = MultiSamplePartData(
-                name: "\(sourceURL.deletingPathExtension().lastPathComponent)_RR_Seg\(index+1)", // Indicate RR + Segment
+                name: "\\(sourceURL.deletingPathExtension().lastPathComponent)_RR_Seg\\(index+1)", // Indicate RR + Segment
                 keyRangeMin: midiNote,
                 keyRangeMax: midiNote,
-                velocityRange: .fullRange, // Full velocity range for Round Robin parts
+                velocityRange: targetVelocityRange, // Assign the calculated target layer's velocity range
                 sourceFileURL: sourceURL,
                 segmentStartSample: startFrame,
                 segmentEndSample: endFrame,
@@ -1309,29 +1354,108 @@ class SamplerViewModel: ObservableObject {
                 originalAbsolutePath: sourceURL.path,
                 sampleRate: metadata.sampleRate,
                 fileSize: metadata.fileSize,
+                crc: nil, // Placeholder
                 lastModDate: metadata.lastModDate,
                 originalFileFrameCount: totalFrames
             )
             newParts.append(segmentPart)
         }
         
-        // --- Apply changes on Main Thread --- 
+        // --- Apply changes on Main Thread ---
         DispatchQueue.main.async {
             self.objectWillChange.send() // Important before mutation
-            // Remove existing samples for the target note before adding RR parts
-            let initialCount = self.multiSampleParts.count
-            self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
-            if self.multiSampleParts.count < initialCount {
-                 print("ViewModel: Removed \(initialCount - self.multiSampleParts.count) existing sample(s) on note \(midiNote) before Round Robin mapping.")
+
+            // --- Update Configuration ---
+            // Mapping segments to RR sets RR = numSegments for the note.
+            // DO NOT reset the number of layers.
+            // self.noteLayerConfiguration[midiNote] = 1 // REMOVED - Keep existing layer configuration
+            // self.noteRoundRobinConfiguration[midiNote] = segments.count // REMOVED - Will be calculated dynamically
+            // --- RESTORE simpler RR config update ---
+            self.noteRoundRobinConfiguration[midiNote] = newParts.count // Set based on number added
+
+            // --- Calculate ANTICIPATED New Max RR Config BEFORE appending ---
+            let currentLayers = self.velocityLayers(for: midiNote) // Get current state
+            let oldMaxRR = self.noteRoundRobinConfiguration[midiNote] ?? 0
+            let samplesInTargetLayer = (targetLayerIndex >= 0 && targetLayerIndex < currentLayers.count) ? currentLayers[targetLayerIndex].activeSampleCount : 0
+            let newTargetLayerCount = samplesInTargetLayer + newParts.count
+            let newMaxRR = max(oldMaxRR, newTargetLayerCount)
+
+            if newMaxRR != oldMaxRR {
+                 print("ViewModel: Anticipating new max RR count of \(newMaxRR) for note \(midiNote) (was \(oldMaxRR)). Updating configuration.")
+                 self.objectWillChange.send() // Notify before changing config
+                 self.noteRoundRobinConfiguration[midiNote] = newMaxRR
+            } else {
+                print("ViewModel: Max RR count for note \(midiNote) remains \(oldMaxRR). No configuration change needed.")
             }
+            // -----------------------------------------------------------
+
+            // Ensure RR mapping mode for the overall sampler if adding RR parts
+            self.currentMappingMode = .roundRobin
+
+            // --- Update Sample Parts ---
+
+            // --- DO NOT REMOVE existing samples ---
+            // self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote } // REMOVED
+
             // Add the new Round Robin parts
             self.multiSampleParts.append(contentsOf: newParts)
-            self.setMappingMode(.roundRobin) // Set mode AFTER adding parts
-            print("ViewModel: Successfully mapped \(newParts.count) segments as Round Robin to note \(midiNote). Set mapping mode.")
+            print("ViewModel: Successfully mapped \(newParts.count) segments as Round Robin to note \(midiNote).")
+
+            // Config was updated *before* append, print statement removed from here.
+
             // didSet will trigger UI update
         }
     }
     // -----------------------------------------------------
+
+    // MARK: - Sample Data Update
+
+    /// Updates the velocity range for a specific sample part identified by its ID within a given MIDI note.
+    /// - Parameters:
+    ///   - note: The MIDI note number where the sample resides.
+    ///   - sampleID: The unique UUID of the MultiSamplePartData to update.
+    ///   - newRange: The new VelocityRangeData to apply.
+    func updateVelocityRange(note: Int, sampleID: UUID, newRange: VelocityRangeData) {
+        print("ViewModel: Request received to update velocity for Sample ID \(sampleID) on Note \(note) to [\(newRange.min)-\(newRange.max)]")
+
+        // Ensure updates happen on the main thread for UI consistency
+        DispatchQueue.main.async {
+            // Use objectWillChange.send() before mutation for complex updates
+            self.objectWillChange.send()
+
+            // Find the index of the sample part to update
+            // We need to iterate through the array to find the matching ID.
+            // Although we have the 'note', the primary identifier is the UUID.
+            if let index = self.multiSampleParts.firstIndex(where: { $0.id == sampleID }) {
+
+                // --- IMPORTANT: Check if the found sample actually belongs to the expected note ---
+                // This is a safety check, as IDs should be unique across notes anyway.
+                guard self.multiSampleParts[index].keyRangeMin == note else {
+                    print("ViewModel ERROR: Found sample ID \(sampleID) at index \(index), but it belongs to note \(self.multiSampleParts[index].keyRangeMin), not the expected note \(note). Aborting update.")
+                    // Optionally show an error to the user
+                    self.showError("Internal data inconsistency: Sample found but associated with the wrong key.")
+                    return
+                }
+
+                // --- Update the velocity range ---
+                // Since MultiSamplePartData is a struct, modifying it creates a new copy.
+                // We need to replace the element in the array with the modified version.
+                self.multiSampleParts[index].velocityRange = newRange
+                print("ViewModel: Successfully updated velocity range for Sample ID \(sampleID) (Name: \(self.multiSampleParts[index].name)) at index \(index).")
+
+                // The @Published wrapper on multiSampleParts should automatically notify SwiftUI
+                // to update any views observing it (like SampleDetailView).
+                // The `didSet` on `multiSampleParts` will also trigger `updatePianoKeySampleStatus()`,
+                // though that's likely not strictly necessary for just a velocity change.
+
+            } else {
+                // Sample ID not found in the array
+                print("ViewModel ERROR: Sample ID \(sampleID) not found in multiSampleParts array. Cannot update velocity.")
+                // Optionally show an error to the user
+                self.showError("Could not find the sample to update its velocity.")
+            }
+        }
+    }
 
     // MARK: - Error Handling
 
@@ -1341,7 +1465,200 @@ class SamplerViewModel: ObservableObject {
         DispatchQueue.main.async {
             self.errorAlertMessage = message
             self.showingErrorAlert = true
-             print("Error Alert Presented: \(message)") // Log for debugging
+             print("Error Alert Presented: \\(message)") // Log for debugging
+        }
+    }
+
+    // MARK: - New Function: Velocity Layers Data Source
+
+    /// Generates the `VelocityLayer` structure for a given MIDI note,
+    /// based on the configuration and existing samples.
+    /// This function is intended as the data source for views like SampleDetailView's grid.
+    func velocityLayers(for midiNote: Int) -> [VelocityLayer] {
+        // 1. Get configuration for the note (use defaults if not set)
+        // Default to 1 layer and 1 RR slot if no specific configuration exists for this note.
+        let numLayers = noteLayerConfiguration[midiNote] ?? 1
+        let maxRR = noteRoundRobinConfiguration[midiNote] ?? 1
+
+        print("Generating layers for note \\(midiNote): \\(numLayers) layers, \\(maxRR) max RRs per layer.")
+
+        // 2. Calculate velocity ranges for the layers
+        // Reusing the existing logic for calculating separate (non-overlapping) ranges.
+        let layerRanges = calculateSeparateVelocityRanges(numberOfFiles: numLayers)
+
+        // Ensure ranges were calculated correctly
+        guard layerRanges.count == numLayers else {
+            print("Error generating layers for note \\(midiNote): Mismatch in calculated ranges (\(layerRanges.count)) vs expected (\(numLayers)). Returning empty.")
+            // Consider showing an error or returning a default single layer.
+            return []
+        }
+        print("  -> Calculated \\(layerRanges.count) velocity ranges.")
+
+        // 3. Create the basic layer structure with empty RR slots
+        var resultLayers: [VelocityLayer] = []
+        for range in layerRanges {
+            // Create a layer with the calculated range and an array of `nil`s for RR slots.
+            // Each `nil` represents an empty Round Robin slot within this velocity layer.
+            let layer = VelocityLayer(velocityRange: range, samples: Array(repeating: nil, count: maxRR))
+            resultLayers.append(layer)
+        }
+         print("  -> Created \\(resultLayers.count) initial VelocityLayer structs with \\(maxRR) RR slots each.")
+
+        // 4. Filter existing samples (`MultiSamplePartData`) that belong to this MIDI note
+        let partsForNote = multiSampleParts.filter { $0.keyRangeMin == midiNote }
+         print("  -> Found \\(partsForNote.count) existing MultiSamplePartData items for note \\(midiNote).")
+
+        // 5. Place existing samples into the correct layer/RR slot based on their velocity
+        for part in partsForNote {
+            // Find the layer this part belongs to based on its minimum velocity.
+            // It fits if the part's min velocity falls within the layer's min/max range.
+            if let layerIndex = resultLayers.firstIndex(where: { $0.velocityRange.min <= part.velocityRange.min && $0.velocityRange.max >= part.velocityRange.min }) {
+                 print("    -> Part \\(part.name) (Vel: \\(part.velocityRange.min)-\\(part.velocityRange.max)) fits into Layer \\(layerIndex) (Range: \\(resultLayers[layerIndex].velocityRange.min)-\\(resultLayers[layerIndex].velocityRange.max))")
+
+                // Find the first empty (nil) Round Robin slot in that layer
+                if let rrIndex = resultLayers[layerIndex].samples.firstIndex(where: { $0 == nil }) {
+                    // Place the sample data into the slot
+                    resultLayers[layerIndex].samples[rrIndex] = part
+                     print("      -> Placed into RR slot \\(rrIndex).")
+                } else {
+                    // Handle the case where the layer is full (no more nil slots)
+                    print("    -> Warning: Note \\(midiNote), Layer \\(layerIndex) (\(resultLayers[layerIndex].velocityRange.min)-\\(resultLayers[layerIndex].velocityRange.max)): No more RR slots available for sample \\(part.name). Max RR: \\(maxRR). Sample *not* placed in this layer.")
+                    // Potential handling strategies for overflow:
+                    // 1. Discard: The sample is ignored (current behavior).
+                    // 2. Append: Dynamically increase the size of the `samples` array in `VelocityLayer` (requires `samples` to be `var`).
+                    // 3. Replace: Overwrite the last sample in the layer.
+                    // 4. Error: Show an error to the user.
+                }
+            } else {
+                 // Handle the case where the sample's velocity doesn't fit any defined layer
+                 print("    -> Warning: Note \\(midiNote): Sample \\(part.name) with range \\(part.velocityRange.min)-\\(part.velocityRange.max) does not fit into any of the \\(numLayers) defined velocity layer ranges. Sample *not* placed.")
+                 // This might happen if sample velocity ranges were set independently
+                 // before the layer configuration was established or changed.
+            }
+        } // End of loop through partsForNote
+
+        print("  -> Finished placing existing samples. Returning \\(resultLayers.count) layers for note \\(midiNote).")
+        return resultLayers
+    }
+
+    // MARK: - Grid Interaction Logic
+
+    /// Adds a sample to a specific layer/RR slot, forcing its velocity to match the layer.
+    func addSampleToGridSlot(partData: MultiSamplePartData, layerIndex: Int, rrIndex: Int, forNote midiNote: Int) {
+        print("ViewModel: Adding sample \\(partData.name) to Note \\(midiNote), Layer \\(layerIndex), RR \\(rrIndex)")
+        
+        // 1. Get Layer Configuration
+        let numLayers = noteLayerConfiguration[midiNote] ?? 1
+        guard layerIndex < numLayers else {
+            print("Error: Attempted to add to layer index \\(layerIndex) but only \\(numLayers) are configured for note \\(midiNote).")
+            showError("Cannot add sample: Target layer index is out of bounds.")
+            return
+        }
+
+        // 2. Calculate the target layer's velocity range
+        let layerRanges = calculateSeparateVelocityRanges(numberOfFiles: numLayers)
+        guard layerIndex < layerRanges.count else {
+             print("Error: Could not calculate velocity range for layer index \\(layerIndex) (numLayers: \\(numLayers)).")
+             showError("Internal error calculating velocity range.")
+             return
+         }
+        let targetVelocityRange = layerRanges[layerIndex]
+        print("  -> Target Layer \\(layerIndex) Velocity Range: [\\(targetVelocityRange.min)-\\(targetVelocityRange.max)]")
+
+        // 3. Create the final MultiSamplePartData with the FORCED velocity range
+        // We create a new instance based on the input, only changing the velocity.
+        let finalPartData = MultiSamplePartData(
+            name: partData.name,
+            keyRangeMin: midiNote, // Ensure it's assigned to the correct note
+            keyRangeMax: midiNote,
+            velocityRange: targetVelocityRange, // FORCE the velocity range
+            sourceFileURL: partData.sourceFileURL,
+            segmentStartSample: partData.segmentStartSample,
+            segmentEndSample: partData.segmentEndSample,
+            relativePath: partData.relativePath,
+            absolutePath: partData.absolutePath,
+            originalAbsolutePath: partData.originalAbsolutePath,
+            sampleRate: partData.sampleRate,
+            fileSize: partData.fileSize,
+            crc: partData.crc,
+            lastModDate: partData.lastModDate,
+            originalFileFrameCount: partData.originalFileFrameCount
+            // Retain other properties from the input partData
+        )
+
+        // 4. Add to the main data store (Main Thread)
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+            
+            // --- TODO: Overwrite/Replace Logic (Phase 1: Simple Append) ---
+            // For now, we just append. The velocityLayers(for:) function will place it.
+            // Later, we might want logic here to find if a sample *already* exists
+            // specifically intended for this layerIndex/rrIndex based on some criteria
+            // (maybe storing layer/rr indices *in* MultiSamplePartData?), and remove it first.
+            // For now, relying on velocityLayers(for:) to sort it out is simpler.
+            self.multiSampleParts.append(finalPartData)
+            print("  -> Appended \\(finalPartData.name) to multiSampleParts.")
+            
+            // Optional: Check if this addition exceeds configured RRs and inform user?
+            let maxRR = self.noteRoundRobinConfiguration[midiNote] ?? 1
+            let currentSamplesInLayer = self.velocityLayers(for: midiNote)[layerIndex].activeSampleCount
+            if currentSamplesInLayer > maxRR { // Check *after* adding conceptually
+                 print("  -> Warning: Layer \\(layerIndex) now has \\(currentSamplesInLayer) samples, exceeding configured max RRs (\\(maxRR)).")
+                 // Optionally show a non-blocking notification?
+            }
+            
+            // The updatePianoKeySampleStatus() will be called via the didSet of multiSampleParts.
+        }
+    }
+    
+    /// Removes a sample from a specific layer/RR slot.
+    func removeSampleFromGridSlot(layerId: UUID, rrIndex: Int, forNote midiNote: Int) {
+        print("ViewModel: Removing sample from Note \\(midiNote), Layer ID \\(layerId), RR Index \\(rrIndex)")
+
+        // 1. Regenerate the layer structure to find the sample ID
+        // This is slightly inefficient but ensures we use the same logic as the view.
+        let currentLayers = velocityLayers(for: midiNote)
+        
+        // 2. Find the target layer using its ID
+        guard let layerIndex = currentLayers.firstIndex(where: { $0.id == layerId }) else {
+            print("Error: Could not find layer with ID \\(layerId) for note \\(midiNote).")
+            showError("Could not find the specified layer to remove the sample from.")
+            return
+        }
+
+        let targetLayer = currentLayers[layerIndex]
+
+        // 3. Validate the RR index and get the sample data
+        guard rrIndex >= 0 && rrIndex < targetLayer.samples.count else {
+             print("Error: RR index \\(rrIndex) is out of bounds for layer \\(layerId) (sample count: \\(targetLayer.samples.count)).")
+             showError("Invalid sample slot index provided for removal.")
+             return
+        }
+
+        guard let sampleToRemove = targetLayer.samples[rrIndex] else {
+            print("Warning: No sample found at Layer ID \\(layerId), RR Index \\(rrIndex). Nothing to remove.")
+            // No error needed, just means the slot was already empty.
+            return
+        }
+
+        let sampleIdToRemove = sampleToRemove.id
+        print("  -> Found sample to remove: ID \\(sampleIdToRemove), Name: \\(sampleToRemove.name)")
+
+        // 4. Remove from the main data store (Main Thread)
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+            
+            let initialCount = self.multiSampleParts.count
+            self.multiSampleParts.removeAll { $0.id == sampleIdToRemove }
+            let finalCount = self.multiSampleParts.count
+
+            if finalCount < initialCount {
+                print("  -> Successfully removed sample with ID \\(sampleIdToRemove) from multiSampleParts.")
+            } else {
+                 print("  -> Warning: Sample ID \\(sampleIdToRemove) was not found in multiSampleParts array during removal attempt.")
+                 // This might indicate a logic inconsistency.
+            }
+            // The updatePianoKeySampleStatus() will be called via the didSet of multiSampleParts.
         }
     }
 }

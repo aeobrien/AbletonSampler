@@ -95,15 +95,153 @@ private struct VelocityZoneCellView: View {
     }
 }
 
+// Define this struct OUTSIDE or INSIDE SampleDetailView, but not inside a function body
+
+struct EditableVelocityView: View {
+    // --- REMOVE @EnvironmentObject ---
+    // @EnvironmentObject var viewModel: SamplerViewModel
+
+    // --- ADD viewModel as a regular property ---
+    let viewModel: SamplerViewModel // Pass explicitly
+
+    let sample: MultiSamplePartData // The sample being edited
+    let midiNote: Int              // Need the note for the update function
+
+    // --- Local state for editing velocity ---
+    @State private var minVelocityString: String
+    @State private var maxVelocityString: String
+    @State private var validationError: String? = nil // To show validation errors
+
+    // --- Update init to accept viewModel ---
+    init(viewModel: SamplerViewModel, sample: MultiSamplePartData, midiNote: Int) {
+        self.viewModel = viewModel // Assign passed viewModel
+        self.sample = sample
+        self.midiNote = midiNote
+        // Initialize @State properties in the initializer
+        _minVelocityString = State(initialValue: "\(sample.velocityRange.min)")
+        _maxVelocityString = State(initialValue: "\(sample.velocityRange.max)")
+        // validationError starts as nil implicitly
+        print("EditableVelocityView init for \(sample.id). Initial min/max strings: \(minVelocityString)/\(maxVelocityString)")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // --- Display Current Velocity (Read-only part) ---
+            HStack {
+                Text("Current Velocity:")
+                    .font(.caption).foregroundColor(.secondary)
+                Text("\(sample.velocityRange.min) - \(sample.velocityRange.max)")
+                Spacer()
+            }
+
+            // --- Editable Fields ---
+            HStack {
+                Text("Edit Min:")
+                TextField("0", text: $minVelocityString)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    #if os(macOS)
+                    .frame(maxWidth: 50)
+                    #else
+                    .keyboardType(.numberPad)
+                    .frame(maxWidth: 50) // iOS/iPadOS
+                    #endif
+
+                Text("Max:")
+                TextField("127", text: $maxVelocityString)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    #if os(macOS)
+                    .frame(maxWidth: 50)
+                    #else
+                    .keyboardType(.numberPad)
+                    .frame(maxWidth: 50) // iOS/iPadOS
+                    #endif
+
+                Spacer() // Push fields left
+
+                // --- Use explicit Button(action:label:) syntax ---
+                Button {
+                    // Action:
+                    validateAndUpdate()
+                } label: {
+                    // Label:
+                    Text("Update Velocity")
+                }
+                // Disable button if the text fields haven't changed from the original sample values
+                .disabled(minVelocityString == "\(sample.velocityRange.min)" && maxVelocityString == "\(sample.velocityRange.max)")
+            }
+
+            // Display validation errors if any
+            if let error = validationError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+        .padding(.vertical, 5)
+        // --- Update local state if the *input* sample data changes ---
+        // This handles cases where the update succeeds and the parent view passes new sample data
+        .onChange(of: sample.velocityRange) { oldRange, newRange in
+             print("EditableVelocityView saw underlying sample \(sample.id) velocityRange change externally from \(oldRange) to \(newRange). Updating text fields.") // Debugging
+             minVelocityString = "\(newRange.min)"
+             maxVelocityString = "\(newRange.max)"
+             validationError = nil // Clear error on external update
+        }
+        // No .id needed here as the struct itself will be recreated if the sample ID changes
+        // in the parent view. onAppear can ensure initial state correctness if needed,
+        // but init handles it here.
+         // .onAppear { // Optional: Verify initial state if needed
+         //    print("EditableVelocityView appearing for \(sample.id). Current min/max strings: \(minVelocityString)/\(maxVelocityString)")
+         // }
+    }
+
+    // Helper function for validation and calling the ViewModel update
+    private func validateAndUpdate() {
+        validationError = nil // Clear previous error
+        guard let minVel = Int(minVelocityString),
+              let maxVel = Int(maxVelocityString) else {
+            validationError = "Invalid number format."
+            print("Validation Error: Invalid number format. Min='\(minVelocityString)', Max='\(maxVelocityString)'")
+            return // Use return here, it's fine in a normal function
+        }
+
+        guard minVel >= 0 && minVel <= 127 && maxVel >= 0 && maxVel <= 127 else {
+            validationError = "Velocity must be 0-127."
+            print("Validation Error: Velocity out of range. Min=\(minVel), Max=\(maxVel)")
+            return // Use return
+        }
+
+        guard minVel <= maxVel else {
+            validationError = "Min velocity cannot exceed Max."
+            print("Validation Error: Min (\(minVel)) > Max (\(maxVel))")
+            return // Use return
+        }
+
+        // --- If validation passes, update the ViewModel ---
+        // Create the specific VelocityRangeData type your ViewModel expects
+        let newRange = VelocityRangeData(min: minVel, max: maxVel, crossfadeMin: minVel, crossfadeMax: maxVel) // Adjust crossfade logic if needed
+        print("EditableVelocityView: Attempting to update Sample ID \(sample.id) (Note: \(midiNote)) to Velocity Range: Min=\(newRange.min), Max=\(newRange.max)") // Debugging
+        // --- Call the ViewModel using the explicitly passed property ---
+        viewModel.updateVelocityRange(note: midiNote, sampleID: sample.id, newRange: newRange)
+    }
+}
+
 struct SampleDetailView: View {
     @EnvironmentObject var viewModel: SamplerViewModel
 
     let midiNote: Int
-    let samples: [MultiSamplePartData]
     let requestSegmentation: (URL, Int) -> Void // Closure to request editor presentation
 
     // --- State for selection and details ---
-    @State private var selectedSampleForDetails: MultiSamplePartData? = nil // Renamed from pickerSelectedSample
+    @State private var selectedSampleForDetails: MultiSamplePartData? = nil {
+        didSet {
+            // Avoid infinite loops if setting programmatically triggers didSet
+            // Though comparing optionals directly should work
+            if oldValue != selectedSampleForDetails {
+                 print("** didSet(selectedSampleForDetails) ** Selection changed. Triggering reload.")
+                 loadAudioFileDetails() // Load data for the new selection
+            }
+        }
+    }
     @State private var detailDropTargeted: Bool = false
 
     // --- NEW: State for Waveform Display (Adapted from AudioSegmentEditorView) ---
@@ -123,51 +261,41 @@ struct SampleDetailView: View {
     @State private var cachedTotalSourceFrames: Int64? = nil
     @State private var cachedMaxRMSValue: Float = 0.001
 
-
     var body: some View {
         // --- Use a computed property for clarity ---
         detailViewContent
             .onAppear {
                 // Select the first sample initially if multiple exist for waveform loading purposes
-                 if samples.count >= 1 && selectedSampleForDetails == nil { // Use renamed state
-                     selectedSampleForDetails = samples.first // Use renamed state
-                 }
+                // --- UPDATED: Find first sample from layers --- 
+                let firstSample = viewModel.velocityLayers(for: midiNote)
+                    .lazy // Avoid creating intermediate arrays if possible
+                    .compactMap { $0.samples.first(where: { $0 != nil }) } // Find the first non-nil sample in any layer
+                    .first // Take the very first one found
+                    
+                if let sampleToSelect = firstSample, selectedSampleForDetails == nil {
+                     selectedSampleForDetails = sampleToSelect
+                     // print("onAppear: Auto-selecting first sample: ID=\(sampleToSelect.id)")
+                }
                  loadAudioFileDetails() // Load waveform for the first/selected sample
              }
-             .onChange(of: samples) {
-                 print("SampleDetailView: Samples array changed, reloading details.")
-                 // Update selected sample for waveform view if needed
-                 // If the previously selected sample is no longer in the list, select the first one.
-                 // Otherwise, keep the selection if possible.
-                 if let currentSelection = selectedSampleForDetails, !samples.contains(where: { $0.id == currentSelection.id }) {
-                     selectedSampleForDetails = samples.first
-                 } else if selectedSampleForDetails == nil {
-                      selectedSampleForDetails = samples.first
-                 }
-                 // Don't automatically reload here, let onChange(of: selectedSampleForDetails) handle it
-                 // loadAudioFileDetails() // REMOVED
-             }
-             // Add onChange for the selection to trigger loading
-             .onChange(of: selectedSampleForDetails) { oldValue, newValue in
-                 // Log the old and new values
-                 let oldID = oldValue?.id.uuidString ?? "nil"
-                 let newID = newValue?.id.uuidString ?? "nil"
-                 let newSegment = newValue.map { "\($0.segmentStartSample)-\($0.segmentEndSample)" } ?? "nil"
-                 print("** onChange(selectedSample) ** Changed from ID: \(oldID) to ID: \(newID), New Segment: \(newSegment)")
-                 print("SampleDetailView: Selection changed, reloading details.")
-                 loadAudioFileDetails() // Load data for the NEW selection
-             }
-             // Remove onChange(of: pickerSelectedSample) as selection is implicit now for waveform
+             // --- REMOVE Temporarily: onChange for zoom/amplitude --- 
+             /*
              .onChange(of: timeZoomScale) { // Kept for potential future waveform controls
                   waveformViewID = UUID()
              }
              .onChange(of: amplitudeScale) { // Kept for potential future waveform controls
                   waveformViewID = UUID()
              }
+             */
     }
 
     @ViewBuilder
     private var detailViewContent: some View {
+         // Get the layer structure once for this view rendering
+         let currentLayers = viewModel.velocityLayers(for: midiNote)
+         // Determine if any sample exists across all layers and slots
+         // let noteHasSamples = !currentLayers.allSatisfy { $0.isEmpty } // We'll show the grid regardless
+
          VStack(alignment: .leading, spacing: 15) {
              // --- Header Section ---
              HStack {
@@ -177,25 +305,54 @@ struct SampleDetailView: View {
              }
              .padding(.bottom, 5)
 
-             // --- Main Content Area ---
-             if samples.isEmpty {
-                 Text("No sample assigned to this key.")
-                     .foregroundColor(.secondary)
-                     .frame(maxWidth: .infinity, alignment: .center)
-                     .padding()
-                 dropZoneForDetailView // Show drop zone even when empty
-                 Spacer()
-             } else {
-                 // --- Display the Grid ---
-                 sampleGridView
+             // --- NEW: Configuration Controls ---
+             HStack {
+                Stepper("Velocity Layers: \(viewModel.noteLayerConfiguration[midiNote] ?? 1)",
+                        value: Binding(
+                            get: { viewModel.noteLayerConfiguration[midiNote] ?? 1 },
+                            set: { newValue in
+                                viewModel.noteLayerConfiguration[midiNote] = max(1, newValue)
+                                print("Set Layers for note \(midiNote) to \(max(1, newValue))")
+                                // Potentially trigger UI update if needed, though binding should handle it
+                            }
+                        ),
+                        in: 1...16) // Allow 1 to 16 layers
 
-                 // --- Display the Details for the selected sample ---
-                 selectedSampleDetailsView
+                Spacer()
 
-                 // --- Keep the Drop Zone ---
-                 dropZoneForDetailView // Show drop zone below details
-                 Spacer() // Push content up
+                Stepper("Max Round Robins: \(viewModel.noteRoundRobinConfiguration[midiNote] ?? 1)",
+                        value: Binding(
+                            get: { viewModel.noteRoundRobinConfiguration[midiNote] ?? 1 },
+                            set: { newValue in
+                                viewModel.noteRoundRobinConfiguration[midiNote] = max(1, newValue)
+                                print("Set Max RRs for note \(midiNote) to \(max(1, newValue))")
+                            }
+                        ),
+                        in: 1...32) // Allow 1 to 32 RRs (adjust range as needed)
              }
+             .padding(.bottom, 10)
+             // --- End Configuration Controls ---
+
+             // --- Main Content Area ---
+             // --- Always Display the Grid ---
+             sampleGridView
+
+             // --- Display the Details for the selected sample (if any) ---
+             // Conditionally show details OR a placeholder message
+             if selectedSampleForDetails != nil {
+                 selectedSampleDetailsView
+             } else {
+                 // Show placeholder if no sample is selected *or* if the note has no samples at all
+                 Text(currentLayers.allSatisfy { $0.isEmpty } ? "No sample assigned to this key. Drop audio below or onto the grid." : "Tap a zone/RR in the grid above to see details.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding()
+             }
+
+             // --- Keep the Drop Zone ---
+             dropZoneForDetailView // Show drop zone below details/grid
+             Spacer() // Push content up
          }
          .padding()
     }
@@ -203,86 +360,184 @@ struct SampleDetailView: View {
     // --- Extracted Grid View ---
     @ViewBuilder
     private var sampleGridView: some View {
-        // --- Grid/Graph System ---
+        // --- NEW Grid Logic based on VelocityLayer --- 
+        let velocityLayers = viewModel.velocityLayers(for: midiNote)
+        let maxRoundRobins = viewModel.noteRoundRobinConfiguration[midiNote] ?? 1
+        
         GeometryReader { geometry in
-            ZStack(alignment: .topLeading) {
+            let totalHeight = geometry.size.height
+            let totalWidth = geometry.size.width
+            
+            // Check for valid configuration and size
+            if !velocityLayers.isEmpty && maxRoundRobins > 0 && totalHeight > 0 && totalWidth > 0 {
+                // --- Valid Configuration: Draw the Grid --- 
+                let robinWidth = totalWidth / CGFloat(maxRoundRobins)
+                
+                ZStack(alignment: .topLeading) {
+                    // Background for the grid area
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.1))
+                        .cornerRadius(5)
+                        
+                    // Draw Layers and Slots
+                    // Iterate over indices as a workaround for potential ForEach/Identifiable issues
+                    ForEach(velocityLayers.indices, id: \.self) { layerIndex in 
+                        // Access the layer using the index
+                        let layer = velocityLayers[layerIndex]
+                        
+                        // --- Restore loop body --- 
+                        // Calculate layer geometry
+                        let minVelocity = CGFloat(layer.velocityRange.min)
+                        let maxVelocity = CGFloat(layer.velocityRange.max)
+                        let velocitySpan = max(1, maxVelocity - minVelocity + 1) // Ensure span is at least 1
+                        let zoneHeight = max(1.0, (velocitySpan / 128.0) * totalHeight)
+                        let zoneTopY = (1.0 - (maxVelocity + 1.0) / 128.0) * totalHeight
+                        // Restore center Y calculation for position
+                        let zoneCenterY = zoneTopY + zoneHeight / 2.0
 
-                // Background for the grid
-                Rectangle()
-                    .fill(Color.secondary.opacity(0.1))
-                    .cornerRadius(5)
+                        // Check if geometry is valid using if statement
+                        if zoneCenterY.isFinite && zoneHeight.isFinite && zoneHeight > 0 { // Check center Y
+                            // Geometry is valid, proceed (inner loop still commented)
+                            
+                            /* // Keep inner loop commented */ // Remove start comment marker
+                            // Draw slots within this layer
+                            ForEach(0..<maxRoundRobins, id: \.self) { rrIndex in
+                                // Restore position calculations inside the loop
+                                let xPosition = (CGFloat(rrIndex) * robinWidth) + (robinWidth / 2.0)
 
-                let totalHeight = geometry.size.height
-                let totalWidth = geometry.size.width
-
-                // --- Determine if samples represent Velocity Zones or Round Robins ---
-                let firstVelocityRange = samples.first?.velocityRange
-                let areRoundRobins = !samples.isEmpty && samples.allSatisfy { $0.velocityRange == firstVelocityRange }
-                let areDefinitelyRoundRobins = areRoundRobins && firstVelocityRange?.min == 0 && firstVelocityRange?.max == 127
-
-                 // --- Debugging Output ---
-                 // Use a non-View-building way to print inside ViewBuilder if needed, like .onAppear on a background element
-                 // let _ = print("SampleDetailView Grid: areRoundRobins = \(areRoundRobins), areDefinitelyRoundRobins = \(areDefinitelyRoundRobins), sample count = \(samples.count)")
-
-                if areDefinitelyRoundRobins {
-                    // --- Draw Round Robins (X-axis) ---
-                    let numberOfRobins = samples.count
-                    if numberOfRobins > 0 {
-                        let robinWidth = totalWidth / CGFloat(numberOfRobins)
-                        HStack(spacing: 0) {
-                            ForEach(samples.indices, id: \.self) { index in
-                                let sample = samples[index]
-                                RoundRobinCellView(
-                                    index: index,
-                                    sample: sample,
-                                    robinWidth: robinWidth,
-                                    zoneHeight: totalHeight,
-                                    onSelect: { selectedSample in
-                                        print("** onTapGesture (RR) ** Selecting sample: ID=\(selectedSample.id), Segment=\(selectedSample.segmentStartSample)-\(selectedSample.segmentEndSample)")
-                                        selectedSampleForDetails = selectedSample
-                                    }
-                                )
-                                .frame(width: robinWidth, height: totalHeight) // Set frame on the cell
-                            }
-                        }
-                    } else {
-                        EmptyView()
-                    }
-
-                } else {
-                    // --- Draw Velocity Zones (Y-axis) --- (Use VStack)
-                    let sortedSamples = samples.sorted { $0.velocityRange.min < $1.velocityRange.min }
-
-                    // --- USE VSTACK INSTEAD OF ZSTACK + POSITION --- 
-                    VStack(alignment: .center, spacing: 0) {
-                        ForEach(sortedSamples) { sample in
-                            VelocityZoneCellView(
-                                sample: sample,
-                                totalWidth: totalWidth, // Pass width
-                                totalHeight: totalHeight, // Pass height for calculation within cell
-                                onSelect: { selectedSample in
-                                    print("** onTapGesture (VZ) ** Selecting sample: ID=\(selectedSample.id), Segment=\(selectedSample.segmentStartSample)-\(selectedSample.segmentEndSample)")
-                                    selectedSampleForDetails = selectedSample
+                                // Check if a sample exists at this specific slot index within the layer's data
+                                let sampleDataOptional: MultiSamplePartData? = (rrIndex < layer.samples.count) ? layer.samples[rrIndex] : nil
+                                
+                                // Decide the cell's appearance
+                                if let sampleData = sampleDataOptional {
+                                    // --- Occupied Slot ---
+                                    Rectangle()
+                                        .fill(Color.blue.opacity(0.7))
+                                        .frame(width: robinWidth, height: zoneHeight)
+                                        .border(Color.black.opacity(0.5), width: 0.5)
+                                        .overlay(
+                                            VStack {
+                                                Text("RR \(rrIndex + 1)")
+                                                Text("Vel: \(layer.velocityRange.min)-\(layer.velocityRange.max)")
+                                                Text(sampleData.sourceFileURL.lastPathComponent)
+                                                   .font(.caption2)
+                                                   .lineLimit(1)
+                                                   .truncationMode(.middle)
+                                            }
+                                            .font(.caption)
+                                            .foregroundColor(.white)
+                                            .padding(2)
+                                            .minimumScaleFactor(0.5),
+                                            alignment: .center
+                                        )
+                                        // --- APPLY .contentShape BEFORE .position --- 
+                                        .contentShape(Rectangle())
+                                        .position(x: xPosition, y: zoneCenterY)
+                                        // -----------------------------------------
+                                        .zIndex(Double(velocityLayers.count - 1 - layerIndex)) // Apply zIndex directly
+                                        .onTapGesture {
+                                             print("Tapped Occupied Slot: LayerID=\(layer.id), RR=\(rrIndex), SampleID=\(sampleData.id)")
+                                             selectedSampleForDetails = sampleData // Update selection
+                                        }
+                                        .contextMenu { // Add context menu for removal
+                                             Button(role: .destructive) {
+                                                 viewModel.removeSampleFromGridSlot(layerId: layer.id, rrIndex: rrIndex, forNote: midiNote)
+                                             } label: {
+                                                 Label("Remove Sample", systemImage: "trash")
+                                             }
+                                         }
+                                } else {
+                                    // --- Empty Slot ---
+                                    Rectangle()
+                                        .fill(Color.gray.opacity(0.2))
+                                        .frame(width: robinWidth, height: zoneHeight)
+                                        .border(Color.gray.opacity(0.3), width: 0.5)
+                                        // --- APPLY .contentShape BEFORE .position --- 
+                                        .contentShape(Rectangle())
+                                        .position(x: xPosition, y: zoneCenterY)
+                                        // -----------------------------------------
+                                        .zIndex(Double(velocityLayers.count - 1 - layerIndex)) // Apply zIndex directly
+                                        .onTapGesture {
+                                             print("Tapped Empty Slot: LayerID=\(layer.id), RR=\(rrIndex)")
+                                             // Optionally clear selection or prepare for drop?
+                                             selectedSampleForDetails = nil // Clear selection when tapping empty slot
+                                        }
                                 }
-                            )
-                            // Frame is set inside VelocityZoneCellView, VStack handles arrangement
-                            // No .position() needed here
+                            } // End ForEach rrIndex
+                            /* */ // Remove end comment marker
+                            
+                        } else {
+                            // Geometry is invalid, print warning and do nothing further for this layer
+                            let _ = print("Warning: Skipping layer draw due to invalid geometry for range \\(layer.velocityRange.min)-\\(layer.velocityRange.max)")
+                            // Implicitly continue to next layer index by finishing this iteration
                         }
-                    }
-                    // --- END VSTACK ---
-                }
-            } // End ZStack (Outer ZStack for background/alignment)
+                        // --- End loop body --- 
+                    } // End ForEach layerIndex
+                } // End ZStack
+                // --- Add Drop Target (Modified) ---
+                .onDrop(of: [UTType.fileURL], isTargeted: nil) { providers, location in // Accept fileURL
+                     print("Drop detected at location: \\(location)")
+                     guard let provider = providers.first else { return false }
+     
+                     let numLayers = viewModel.noteLayerConfiguration[midiNote] ?? 1
+                     let currentMaxRR = viewModel.noteRoundRobinConfiguration[midiNote] ?? 1 // Use current config
+                     guard numLayers > 0, currentMaxRR > 0, totalHeight > 0, totalWidth > 0 else { return false }
+     
+                     // Calculate target Layer index (using equal height assumption is okay here for index finding)
+                     let approxLayerHeight = totalHeight / CGFloat(numLayers)
+                     let targetLayerIndex = min(numLayers - 1, max(0, Int(location.y / approxLayerHeight)))
+                     
+                     // Calculate target RR index
+                     let finalRobinWidth = totalWidth / CGFloat(currentMaxRR) // Use correct width for calculation
+                     let targetRRIndex = min(currentMaxRR - 1, max(0, Int(location.x / finalRobinWidth)))
+     
+                     print("  -> Calculated Target Slot: Layer \\(targetLayerIndex), RR \\(targetRRIndex)")
+     
+                     _ = provider.loadObject(ofClass: URL.self) { url, error in
+                          // --- ADD more specific error handling and WAV check ---
+                          if let error = error {
+                              print("Error loading dropped item provider: \\(error.localizedDescription)")
+                              Task { @MainActor in viewModel.showError("Error reading dropped file: \\(error.localizedDescription)") }
+                              return
+                          }
+                          guard let fileURL = url else {
+                              print("Error: Dropped item URL is nil")
+                              Task { @MainActor in viewModel.showError("Could not read the dropped file.") }
+                              return
+                          }
+                          guard fileURL.pathExtension.lowercased() == "wav" else {
+                              print("Error: Dropped file is not a WAV: \\(fileURL.path)")
+                              Task { @MainActor in viewModel.showError("Only WAV files can be dropped onto the grid.") }
+                              return
+                          }
+                          print("  -> Dropped File URL: \\(fileURL.path)")
+                          DispatchQueue.main.async {
+                              guard let metadata = viewModel.extractAudioMetadata(fileURL: fileURL) else { print("Error: Could not extract metadata..."); return }
+                              let tempPartData = MultiSamplePartData(name: fileURL.deletingPathExtension().lastPathComponent, keyRangeMin: midiNote, keyRangeMax: midiNote, velocityRange: .fullRange, sourceFileURL: fileURL, segmentStartSample: 0, segmentEndSample: metadata.frameCount ?? 0, relativePath: nil, absolutePath: fileURL.path, originalAbsolutePath: fileURL.path, sampleRate: metadata.sampleRate, fileSize: metadata.fileSize, crc: nil, lastModDate: metadata.lastModDate, originalFileFrameCount: metadata.frameCount)
+                              viewModel.addSampleToGridSlot(partData: tempPartData, layerIndex: targetLayerIndex, rrIndex: targetRRIndex, forNote: midiNote)
+                          }
+                     }
+                     // --- End specific error handling ---
+                     return true
+                 }
+                 // --- End Drop Target --- 
+                 
+            } else {
+                // --- Invalid Configuration: Show Message --- 
+                Text("Grid cannot be displayed. Check configuration or layout.")
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .background(Color.secondary.opacity(0.1))
+            }
         } // End GeometryReader
-        // Adjust frame for smaller size
-        .frame(height: 75) // Set fixed height instead of minHeight
-        .padding(.bottom) // Add some space below the grid
+        .frame(height: 150) // Restore desired frame height for the grid
+        .padding(.bottom)
     }
 
     // --- View for Selected Sample Details ---
     @ViewBuilder
     private var selectedSampleDetailsView: some View {
         // Use the currently selected sample for display
-        // If selection changes, this view will re-render with the new sample
         if let sample = selectedSampleForDetails {
             let _ = print("** selectedSampleDetailsView ** Rendering details for sample: ID=\(sample.id), Segment=\(sample.segmentStartSample)-\(sample.segmentEndSample)")
             VStack(alignment: .leading, spacing: 10) {
@@ -294,6 +549,7 @@ struct SampleDetailView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
 
+                // --- Display Segment Info ---
                 HStack {
                    VStack(alignment: .leading) {
                        Text("Segment Start:")
@@ -314,11 +570,17 @@ struct SampleDetailView: View {
                         .foregroundColor(.secondary)
                 }
 
-                // --- Waveform Display Area for Selected Sample ---
+                // --- USE THE NEW STRUCT for Editable Velocity Section ---
+                Divider() // Add separator
+                // --- Pass viewModel explicitly ---
+                EditableVelocityView(viewModel: self.viewModel, sample: sample, midiNote: midiNote)
+                // --- End USE THE NEW STRUCT ---
+
+
+                // --- Waveform Display Area ---
                 Text("Waveform:")
                     .font(.headline)
                     .padding(.top, 5)
-                 // Pass the *currently selected sample* to the waveform area
                  waveformDisplayArea(sampleToDisplay: sample)
 
             }
@@ -677,7 +939,7 @@ struct SampleDetailView: View {
                 let xPosition = normalizedX * size.width // Position within the full view width
 
                 // Use passed-in rmsData safely
-                guard i >= 0 && i < rmsData.count else { continue } // Safety check for index bounds
+                guard i >= 0 && i < rmsData.count else { continue }
                 let rmsValue = CGFloat(rmsData[i])
 
                 // Use passed-in ampScale
@@ -907,24 +1169,23 @@ struct SampleDetailView: View {
     // Use a Group or TabView to show both scenarios in Preview
     Group {
         // Velocity Zones Preview
-        SampleDetailView(midiNote: 60, samples: [sample1, sample2]) { url, note in
+        SampleDetailView(midiNote: 60) { url, note in
             print("Preview (Vel): Request segmentation for \(url.lastPathComponent) on note \(note)")
         }
         .previewDisplayName("Velocity Zones")
         .padding()
 
         // Round Robins Preview (Using same dummy URL for preview simplicity)
-        let rrPreviewSample1 = MultiSamplePartData( name: "RR Preview 1", keyRangeMin: 61, keyRangeMax: 61, velocityRange: VelocityRangeData(min: 0, max: 127, crossfadeMin: 0, crossfadeMax: 127), sourceFileURL: dummyFileURL, segmentStartSample: 0, segmentEndSample: 49999, absolutePath: dummyFileURL.path, originalAbsolutePath: dummyFileURL.path, sampleRate: 44100, fileSize: 102400, lastModDate: Date(), originalFileFrameCount: 100000)
-        let rrPreviewSample2 = MultiSamplePartData( name: "RR Preview 2", keyRangeMin: 61, keyRangeMax: 61, velocityRange: VelocityRangeData(min: 0, max: 127, crossfadeMin: 0, crossfadeMax: 127), sourceFileURL: dummyFileURL, segmentStartSample: 50000, segmentEndSample: 99999, absolutePath: dummyFileURL.path, originalAbsolutePath: dummyFileURL.path, sampleRate: 44100, fileSize: 102400, lastModDate: Date(), originalFileFrameCount: 100000)
-
-        SampleDetailView(midiNote: 61, samples: [rrPreviewSample1, rrPreviewSample2]) { url, note in
+        // NOTE: The old preview passed [rrPreviewSample1, rrPreviewSample2]. This logic is now 
+        // handled internally by the view using the ViewModel. This preview will appear empty initially.
+        SampleDetailView(midiNote: 61) { url, note in
             print("Preview (RR): Request segmentation for \(url.lastPathComponent) on note \(note)")
         }
         .previewDisplayName("Round Robins")
         .padding()
 
          // Empty State Preview
-         SampleDetailView(midiNote: 62, samples: []) { url, note in
+         SampleDetailView(midiNote: 62) { url, note in
              print("Preview (Empty): Request segmentation for \(url.lastPathComponent) on note \(note)")
          }
          .previewDisplayName("Empty")

@@ -58,9 +58,7 @@ struct AudioSegmentEditorView: View {
     @Environment(\.dismiss) var dismiss
     
     let audioFileURL: URL
-    // --- NEW: Optional override for target note context ---
     let targetNoteOverride: Int? // If provided, restricts mapping options
-    // ------------------------------------------------------
     
     // --- State for Audio Data & Waveform ---
     @State private var audioFile: AVAudioFile? = nil
@@ -91,6 +89,10 @@ struct AudioSegmentEditorView: View {
     @State private var scrollOffset: CGPoint = .zero // Current scroll position
     @State private var waveformViewID = UUID() // To force geometry reader update sometimes
     // ------------------------------------------
+    
+    // --- NEW: State for selecting the target layer for RR mapping ---
+    @State private var selectedLayerIndex: Int = 0
+    // --------------------------------------------------------------
     
     // --- Computed property for the full MIDI range (0-127) ---
     private var availablePianoKeys: [PianoKey] {
@@ -137,9 +139,10 @@ struct AudioSegmentEditorView: View {
         self.targetNoteOverride = targetNoteOverride
         // Initialize targetMidiNote based on override or default
         self._targetMidiNote = State(initialValue: targetNoteOverride ?? 60) // Default C4 if no override
+        // selectedLayerIndex defaults to 0
     }
     
-        var body: some View {
+    var body: some View {
         VStack(spacing: 15) { // Main VStack for the whole view
             Text("Audio Segment Editor")
                 .font(.title2)
@@ -340,34 +343,80 @@ struct AudioSegmentEditorView: View {
                 }
                 HStack {
                     Text("Map as Round Robin on note:")
-                    Picker("Target Note", selection: $targetMidiNote) { // Reuse targetMidiNote state
+                    Picker("Target Note", selection: $targetMidiNote) { // Binds to targetMidiNote
                         ForEach(availablePianoKeys) { key in Text("\(key.name) (\(key.id))").tag(key.id) }
                     }
-                    .frame(width: 120).labelsHidden()
+                    .frame(maxWidth: 120).labelsHidden() // Ensure consistent width
+
+                    // --- NEW: Layer Picker for RR ---
+                    let layerCount = viewModel.noteLayerConfiguration[targetMidiNote] ?? 1
+                    Picker("Target Layer", selection: $selectedLayerIndex) {
+                        ForEach(0..<layerCount) { index in
+                            Text("Layer \(index + 1)").tag(index)
+                        }
+                    }
+                    .frame(maxWidth: 120) // Ensure consistent width
+                    .clipped() // Prevent text overflow
+                    .disabled(layerCount <= 1) // Disable if only one layer
+                    // --- END Layer Picker ---
+
                     Spacer()
                     Button("Map Round Robin") {
-                        mapAllSegmentsAsRoundRobin(targetNote: targetMidiNote, vm: self.viewModel)
+                        // --- Pass selectedLayerIndex ---
+                        mapAllSegmentsAsRoundRobin(
+                            targetNote: targetMidiNote,
+                            targetLayer: selectedLayerIndex, // Pass state variable
+                            vm: self.viewModel
+                        )
+                        // ---------------------------
                     }
                     .buttonStyle(.bordered)
                     .disabled(markers.isEmpty && numberOfSegments <= 1)
                 }
 
-            } else { // Restricted Controls
-                Text("Map Segments to Note \(targetNoteOverride!)").font(.headline)
+            } else {
+                // --- Restricted Editor Mode (targetNoteOverride is set) ---
+                let fixedTargetNote = targetNoteOverride!
+                Text("Map Segments to Note \(fixedTargetNote)").font(.headline)
                 HStack {
                     Button("Map Segments as Velocity Zones") {
-                        mapAllSegmentsAsVelocityZones(targetNote: targetNoteOverride!, vm: self.viewModel)
+                        mapAllSegmentsAsVelocityZones(targetNote: fixedTargetNote, vm: self.viewModel)
                     }
                     .buttonStyle(.bordered)
                     .disabled(markers.isEmpty && numberOfSegments <= 1)
                     Spacer()
-                    Button("Map Segments as Round Robin") {
-                        mapAllSegmentsAsRoundRobin(targetNote: targetNoteOverride!, vm: self.viewModel)
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(markers.isEmpty && numberOfSegments <= 1)
                 }
                 .frame(maxWidth: .infinity)
+
+                // Round Robin Button and Layer Picker...
+                 HStack {
+                     // --- NEW: Layer Picker for RR (Restricted Mode) ---
+                     let layerCount = viewModel.noteLayerConfiguration[fixedTargetNote] ?? 1
+                     Picker("Target Layer", selection: $selectedLayerIndex) {
+                         ForEach(0..<layerCount) { index in
+                             Text("Layer \(index + 1)").tag(index)
+                         }
+                     }
+                     .frame(maxWidth: 120) // Adjust width as needed
+                     .clipped()
+                     .disabled(layerCount <= 1)
+                     // --- END Layer Picker ---
+
+                     Spacer() // Push button to the right
+
+                     Button("Map Segments as Round Robin") {
+                          // --- Pass selectedLayerIndex ---
+                          mapAllSegmentsAsRoundRobin(
+                              targetNote: fixedTargetNote,
+                              targetLayer: selectedLayerIndex, // Pass state variable
+                              vm: self.viewModel
+                          )
+                          // ---------------------------
+                     }
+                     .buttonStyle(.bordered)
+                     .disabled(markers.isEmpty && numberOfSegments <= 1)
+                 }
+                 .frame(maxWidth: .infinity)
             } // End Conditional Mapping Controls
 
             // --- Action Buttons ---
@@ -405,6 +454,15 @@ struct AudioSegmentEditorView: View {
             print("Transient sensitivity slider changed to \(newValue). Re-detecting transients.")
             detectAndSetTransients()
         }
+        // --- NEW: Reset selectedLayerIndex if targetMidiNote changes ---
+        .onChange(of: targetMidiNote) { _, _ in
+             // Only reset if we are *not* in restricted mode
+             if targetNoteOverride == nil {
+                 selectedLayerIndex = 0
+                 print("Target MIDI Note changed, resetting selected layer index to 0.")
+             }
+        }
+        // --- END NEW onChange ---
     } // End body
     // --- Helper Functions ---
 
@@ -846,15 +904,21 @@ struct AudioSegmentEditorView: View {
     }
 
     // MODIFIED: Accept ViewModel as parameter
-    private func mapAllSegmentsAsRoundRobin(targetNote: Int, vm: SamplerViewModel) {
-        let segments = calculateSegments() // Use corrected function
+    private func mapAllSegmentsAsRoundRobin(targetNote: Int, targetLayer: Int, vm: SamplerViewModel) {
+        let segments = calculateSegments()
         guard !segments.isEmpty else {
              vm.showError("Cannot map: No segments defined (add markers first).")
              return
          }
-        print("View: Requesting mapping of \(segments.count) segments as round robin to note \(targetNote)")
-        // Use passed vm instance to call the ViewModel function (when implemented)
-        vm.mapSegmentsAsRoundRobin(segments: segments, midiNote: targetNote, sourceURL: self.audioFileURL)
+        print("View: Requesting mapping of \(segments.count) segments as round robin to note \(targetNote), layer \(targetLayer)")
+        // --- Pass targetLayer to the updated ViewModel function ---
+        vm.mapSegmentsAsRoundRobin(
+            segments: segments,
+            midiNote: targetNote,
+            sourceURL: self.audioFileURL,
+            targetLayerIndex: targetLayer // Pass the selected index
+        )
+        // -------------------------------------------------------
         dismiss()
     }
 
