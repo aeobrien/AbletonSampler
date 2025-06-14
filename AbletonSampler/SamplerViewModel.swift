@@ -316,13 +316,13 @@ class SamplerViewModel: ObservableObject {
         DispatchQueue.main.async {
             self.objectWillChange.send()
 
-            // --- Update Configuration ---
+            // --- Update Configuration --- 
             // A single drop resets the configuration for this note.
             self.noteLayerConfiguration[midiNote] = 1
             self.noteRoundRobinConfiguration[midiNote] = 1
             print("Single Drop: Reset configuration for note \\(midiNote) to 1 layer, 1 RR.")
 
-            // --- Update Sample Parts ---
+            // --- Update Sample Parts --- 
             // Remove any existing parts for this key before adding the new one
             self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
             self.multiSampleParts.append(partData)
@@ -407,19 +407,19 @@ class SamplerViewModel: ObservableObject {
         DispatchQueue.main.async {
             self.objectWillChange.send()
 
-            // --- Update Configuration ---
+            // --- Update Configuration --- 
             // Velocity split sets layers = numFiles, RR = 1.
             self.noteLayerConfiguration[midiNote] = numberOfFiles
             self.noteRoundRobinConfiguration[midiNote] = 1
             self.currentMappingMode = .standard // Ensure standard mapping mode
             print("Velocity Split Drop: Set configuration for note \\(midiNote) to \\(numberOfFiles) layers, 1 RR.")
 
-            // --- Update Sample Parts ---
+            // --- Update Sample Parts --- 
              // Remove any existing parts for this key before adding the new ones
             self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
             self.multiSampleParts.append(contentsOf: newParts)
 
-            // --- Cleanup ---
+            // --- Cleanup --- 
             self.pendingDropInfo = nil
             self.showingVelocitySplitPrompt = false
             // `multiSampleParts` didSet will trigger updatePianoKeySampleStatus()
@@ -453,7 +453,7 @@ class SamplerViewModel: ObservableObject {
              return
         }
 
-        // --- Prepare Parts (all get full velocity range) ---
+        // --- Prepare Parts (all get full velocity range) --- 
         var newPartsData: [MultiSamplePartData] = []
         for (index, fileURL) in fileURLs.enumerated() {
             guard let metadata = extractAudioMetadata(fileURL: fileURL) else {
@@ -482,24 +482,24 @@ class SamplerViewModel: ObservableObject {
             print("Prepared RR part \\(index + 1)/\\(numberOfFiles): \\(partData.name) for key \\(midiNote)")
         }
 
-        // --- Add Parts and Update State ---
+        // --- Add Parts and Update State --- 
         DispatchQueue.main.async {
             self.objectWillChange.send()
 
-            // --- Update Configuration ---
+            // --- Update Configuration --- 
             // Round Robin sets layers = 1, RR = numFiles.
             self.noteLayerConfiguration[midiNote] = 1
             self.noteRoundRobinConfiguration[midiNote] = numberOfFiles
             self.currentMappingMode = .roundRobin // Set mapping mode for RR
             print("Round Robin Drop: Set configuration for note \\(midiNote) to 1 layer, \\(numberOfFiles) RRs. Set mapping mode.")
 
-            // --- Update Sample Parts ---
+            // --- Update Sample Parts --- 
             // First, clear *all* existing parts for the target note before adding RR samples.
             self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
             // Add the new Round Robin parts
             self.multiSampleParts.append(contentsOf: newPartsData)
 
-            // --- Cleanup ---
+            // --- Cleanup --- 
             self.pendingDropInfo = nil
             self.showingVelocitySplitPrompt = false
 
@@ -1164,7 +1164,7 @@ class SamplerViewModel: ObservableObject {
             return
         }
 
-        // --- Prepare New Parts ---
+        // --- Prepare New Parts --- 
         var newParts: [MultiSamplePartData] = []
         for (index, segment) in segments.enumerated() {
             let startFrame = Int64(segment.start * Double(totalFrames))
@@ -1194,18 +1194,18 @@ class SamplerViewModel: ObservableObject {
             newParts.append(segmentPart)
         }
 
-        // --- Apply changes on Main Thread ---
+        // --- Apply changes on Main Thread --- 
         DispatchQueue.main.async {
              self.objectWillChange.send()
 
-             // --- Update Configuration ---
+             // --- Update Configuration --- 
              // Mapping segments to velocity sets layers = numSegments, RR = 1.
              self.noteLayerConfiguration[midiNote] = segments.count
              self.noteRoundRobinConfiguration[midiNote] = 1
              self.currentMappingMode = .standard // Ensure standard mapping mode
              print("Add Segments as Velocity: Set configuration for note \\(midiNote) to \\(segments.count) layers, 1 RR.")
 
-             // --- Update Sample Parts ---
+             // --- Update Sample Parts --- 
              // Clear existing samples for the target note
              let initialCount = self.multiSampleParts.count
              self.multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
@@ -1232,7 +1232,7 @@ class SamplerViewModel: ObservableObject {
             return
         }
 
-        // --- Determine notes to clear and prepare new parts ---
+        // --- Determine notes to clear and prepare new parts --- 
         var newParts: [MultiSamplePartData] = []
         var notesToUpdateConfig: Set<Int> = [] // Keep track of notes whose config needs reset
 
@@ -1271,11 +1271,11 @@ class SamplerViewModel: ObservableObject {
             newParts.append(segmentPart)
         }
         
-        // --- Apply changes on Main Thread ---
+        // --- Apply changes on Main Thread --- 
         DispatchQueue.main.async {
             self.objectWillChange.send() // Important before mutation
 
-            // --- Update Configuration ---
+            // --- Update Configuration --- 
             // Reset configuration for each affected note to 1 layer, 1 RR.
             for note in notesToUpdateConfig {
                 self.noteLayerConfiguration[note] = 1
@@ -1284,7 +1284,7 @@ class SamplerViewModel: ObservableObject {
             self.currentMappingMode = .standard // Ensure standard mapping mode
             print("Sequential Map: Reset configuration for \\(notesToUpdateConfig.count) notes to 1 layer, 1 RR.")
 
-            // --- Update Sample Parts ---
+            // --- Update Sample Parts --- 
             // Remove existing samples for the notes being mapped
             let initialCount = self.multiSampleParts.count
             self.multiSampleParts.removeAll { $0.keyRangeMin == $0.keyRangeMax && notesToUpdateConfig.contains($0.keyRangeMin) } // Use notesToUpdateConfig here
@@ -1315,7 +1315,7 @@ class SamplerViewModel: ObservableObject {
             return
         }
 
-        // --- Calculate Target Velocity Range ---
+        // --- Calculate Target Velocity Range --- 
         let numLayers = noteLayerConfiguration[midiNote] ?? 1 // Get current layer count
         guard targetLayerIndex >= 0 && targetLayerIndex < numLayers else {
              print("ViewModel Error: Invalid targetLayerIndex (\\(targetLayerIndex)) for \\(numLayers) configured layers on note \\(midiNote).")
@@ -1331,7 +1331,7 @@ class SamplerViewModel: ObservableObject {
         let targetVelocityRange = layerRanges[targetLayerIndex]
         print("  -> Mapping RR segments to velocity range: [\\(targetVelocityRange.min)-\\(targetVelocityRange.max)]")
 
-        // --- Prepare New Parts ---
+        // --- Prepare New Parts --- 
         var newParts: [MultiSamplePartData] = []
         for (index, segment) in segments.enumerated() {
             let startFrame = Int64(segment.start * Double(totalFrames))
@@ -1361,16 +1361,16 @@ class SamplerViewModel: ObservableObject {
             newParts.append(segmentPart)
         }
         
-        // --- Apply changes on Main Thread ---
+        // --- Apply changes on Main Thread --- 
         DispatchQueue.main.async {
             self.objectWillChange.send() // Important before mutation
 
-            // --- Update Configuration ---
+            // --- Update Configuration --- 
             // Mapping segments to RR sets RR = numSegments for the note.
             // DO NOT reset the number of layers.
             // self.noteLayerConfiguration[midiNote] = 1 // REMOVED - Keep existing layer configuration
             // self.noteRoundRobinConfiguration[midiNote] = segments.count // REMOVED - Will be calculated dynamically
-            // --- RESTORE simpler RR config update ---
+            // --- RESTORE simpler RR config update --- 
             self.noteRoundRobinConfiguration[midiNote] = newParts.count // Set based on number added
 
             // --- Calculate ANTICIPATED New Max RR Config BEFORE appending ---
@@ -1590,10 +1590,10 @@ class SamplerViewModel: ObservableObject {
         DispatchQueue.main.async {
             self.objectWillChange.send()
             
-            // --- TODO: Overwrite/Replace Logic (Phase 1: Simple Append) ---
+            // --- TODO: Overwrite/Replace Logic (Phase 1: Simple Append) --- 
             // For now, we just append. The velocityLayers(for:) function will place it.
             // Later, we might want logic here to find if a sample *already* exists
-            // specifically intended for this layerIndex/rrIndex based on some criteria
+            // specifically intended for this layerIndex/rrIndex based on some criteria 
             // (maybe storing layer/rr indices *in* MultiSamplePartData?), and remove it first.
             // For now, relying on velocityLayers(for:) to sort it out is simpler.
             self.multiSampleParts.append(finalPartData)
