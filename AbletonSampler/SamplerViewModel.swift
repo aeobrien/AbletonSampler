@@ -131,15 +131,26 @@ struct MultiSamplePartData: Identifiable, Hashable {
     var tuneScale: Int = 100
     var panorama: Int = 0
     var volume: Double = 1.0 // Representing <Volume Value="1">
-    var link: Bool = false
+    var link: Bool = false // When true, sample start position is linked to loop start position
     // --- Adjusted Sample Start/End for Segment ---
     var sampleStart: Int64 { segmentStartSample } // Correct: Playback starts at the segment's start in the source file
     var sampleEnd: Int64 { segmentEndSample }     // Correct: Playback ends at the segment's end in the source file
 
     // Nested structures mirroring XML (simplified for now)
     // These would need more complex structs if we needed to configure loops, warp markers etc.
-    var sustainLoopMode: Int = 0 // Off
-    var releaseLoopMode: Int = 3 // Off (no release sample)
+    
+    // --- Loop Point Properties ---
+    var sustainLoopStart: Int64? = nil // Sample position for sustain loop start (nil = no loop)
+    var sustainLoopEnd: Int64? = nil // Sample position for sustain loop end
+    var sustainLoopMode: Int = 0 // 0=Off, 1=Forward, 2=Forward-Backward (ping-pong)
+    var sustainLoopCrossfade: Double = 0.0 // Crossfade amount (0-1)
+    var sustainLoopDetune: Double = 0.0 // Detune amount for loop
+    
+    var releaseLoopStart: Int64? = nil // Sample position for release loop start (nil = no loop)
+    var releaseLoopEnd: Int64? = nil // Sample position for release loop end
+    var releaseLoopMode: Int = 3 // 3=Off (default for release), 1=Forward, 2=Forward-Backward
+    var releaseLoopCrossfade: Double = 0.0
+    var releaseLoopDetune: Double = 0.0
 }
 
 // MARK: - Velocity Splitting Mode
@@ -1050,18 +1061,18 @@ class SamplerViewModel: ObservableObject {
                                 <SampleStart Value="\(part.sampleStart)" />
                                 <SampleEnd Value="\(part.sampleEnd)" /> <!-- Use calculated sampleEnd -->
                                 <SustainLoop>
-                                    <Start Value="0" />
-                                    <End Value="\(part.sampleEnd)" /> <!-- Use calculated sampleEnd -->
+                                    <Start Value="\(part.sustainLoopStart ?? 0)" />
+                                    <End Value="\(part.sustainLoopEnd ?? part.sampleEnd)" />
                                     <Mode Value="\(part.sustainLoopMode)" />
-                                    <Crossfade Value="0" />
-                                    <Detune Value="0" />
+                                    <Crossfade Value="\(part.sustainLoopCrossfade)" />
+                                    <Detune Value="\(part.sustainLoopDetune)" />
                                 </SustainLoop>
                                 <ReleaseLoop>
-                                    <Start Value="0" />
-                                    <End Value="\(part.sampleEnd)" /> <!-- Use calculated sampleEnd -->
+                                    <Start Value="\(part.releaseLoopStart ?? 0)" />
+                                    <End Value="\(part.releaseLoopEnd ?? part.sampleEnd)" />
                                     <Mode Value="\(part.releaseLoopMode)" />
-                                    <Crossfade Value="0" />
-                                    <Detune Value="0" />
+                                    <Crossfade Value="\(part.releaseLoopCrossfade)" />
+                                    <Detune Value="\(part.releaseLoopDetune)" />
                                 </ReleaseLoop>
                                 <SampleRef>
                                     <FileRef>
@@ -1409,6 +1420,36 @@ class SamplerViewModel: ObservableObject {
     // -----------------------------------------------------
 
     // MARK: - Sample Data Update
+    
+    /// Updates the loop points for a specific sample identified by its ID.
+    /// - Parameters:
+    ///   - sampleID: The unique UUID of the MultiSamplePartData to update.
+    ///   - updatedSample: The updated sample with new loop point values.
+    func updateSampleLoopPoints(sampleID: UUID, updatedSample: MultiSamplePartData) {
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+            
+            guard let index = self.multiSampleParts.firstIndex(where: { $0.id == sampleID }) else {
+                print("ViewModel: Could not find sample with ID \(sampleID) to update loop points.")
+                return
+            }
+            
+            // Update the loop point properties
+            self.multiSampleParts[index].sustainLoopStart = updatedSample.sustainLoopStart
+            self.multiSampleParts[index].sustainLoopEnd = updatedSample.sustainLoopEnd
+            self.multiSampleParts[index].sustainLoopMode = updatedSample.sustainLoopMode
+            self.multiSampleParts[index].sustainLoopCrossfade = updatedSample.sustainLoopCrossfade
+            self.multiSampleParts[index].sustainLoopDetune = updatedSample.sustainLoopDetune
+            self.multiSampleParts[index].releaseLoopStart = updatedSample.releaseLoopStart
+            self.multiSampleParts[index].releaseLoopEnd = updatedSample.releaseLoopEnd
+            self.multiSampleParts[index].releaseLoopMode = updatedSample.releaseLoopMode
+            self.multiSampleParts[index].releaseLoopCrossfade = updatedSample.releaseLoopCrossfade
+            self.multiSampleParts[index].releaseLoopDetune = updatedSample.releaseLoopDetune
+            self.multiSampleParts[index].link = updatedSample.link
+            
+            print("ViewModel: Updated loop points for sample ID \(sampleID)")
+        }
+    }
 
     /// Updates the velocity range for a specific sample part identified by its ID within a given MIDI note.
     /// - Parameters:
@@ -1541,6 +1582,88 @@ class SamplerViewModel: ObservableObject {
         return resultLayers
     }
 
+    // MARK: - Batch Import Support
+    
+    /// Imports a batch of samples with pre-parsed velocity ranges and round robin info
+    func importBatchSamples(for midiNote: Int, samples: [(url: URL, velocityRange: (min: Int, max: Int), roundRobinIndex: Int)]) {
+        print("Batch importing \(samples.count) samples for note \(midiNote)")
+        
+        guard !samples.isEmpty else {
+            print("ERROR: No samples to import!")
+            return
+        }
+        
+        // Group by velocity range to determine layer configuration
+        var velocityGroups: [String: [(url: URL, rrIndex: Int)]] = [:]
+        
+        for sample in samples {
+            let key = "\(sample.velocityRange.min)-\(sample.velocityRange.max)"
+            if velocityGroups[key] == nil {
+                velocityGroups[key] = []
+            }
+            velocityGroups[key]?.append((url: sample.url, rrIndex: sample.roundRobinIndex))
+            print("  Added sample to velocity group \(key), RR index: \(sample.roundRobinIndex)")
+        }
+        
+        // Configure layers and round robins
+        let numLayers = velocityGroups.count
+        let maxRoundRobins = velocityGroups.values.map { $0.count }.max() ?? 1
+        
+        print("  Velocity groups: \(velocityGroups.keys.sorted())")
+        print("  Setting configuration: \(numLayers) layers, \(maxRoundRobins) round robins")
+        
+        noteLayerConfiguration[midiNote] = numLayers
+        noteRoundRobinConfiguration[midiNote] = maxRoundRobins
+        
+        // Clear existing samples for this note
+        let removedCount = multiSampleParts.filter { $0.keyRangeMin == midiNote }.count
+        multiSampleParts.removeAll { $0.keyRangeMin == midiNote }
+        print("  Removed \(removedCount) existing samples")
+        
+        // Import each sample with its specific velocity range
+        var importedCount = 0
+        for sample in samples {
+            guard let metadata = extractAudioMetadata(fileURL: sample.url) else {
+                print("Warning: Could not extract metadata for \(sample.url.lastPathComponent)")
+                continue
+            }
+            
+            let partData = MultiSamplePartData(
+                name: sample.url.deletingPathExtension().lastPathComponent,
+                keyRangeMin: midiNote,
+                keyRangeMax: midiNote,
+                velocityRange: VelocityRangeData(
+                    min: sample.velocityRange.min,
+                    max: sample.velocityRange.max,
+                    crossfadeMin: sample.velocityRange.min,
+                    crossfadeMax: sample.velocityRange.max
+                ),
+                sourceFileURL: sample.url,
+                segmentStartSample: 0,
+                segmentEndSample: metadata.frameCount ?? 0,
+                relativePath: nil,
+                absolutePath: sample.url.path,
+                originalAbsolutePath: sample.url.path,
+                sampleRate: metadata.sampleRate,
+                fileSize: metadata.fileSize,
+                crc: nil, // CRC calculation not implemented yet
+                lastModDate: metadata.lastModDate,
+                originalFileFrameCount: metadata.frameCount
+            )
+            
+            multiSampleParts.append(partData)
+            importedCount += 1
+        }
+        
+        // Update piano key to show it has samples
+        if let keyIndex = pianoKeys.firstIndex(where: { $0.id == midiNote }) {
+            pianoKeys[keyIndex].hasSample = true
+        }
+        
+        print("Batch import complete: imported \(importedCount) samples, configured \(numLayers) layers, \(maxRoundRobins) round robins")
+        print("  Total samples for note \(midiNote): \(multiSampleParts.filter { $0.keyRangeMin == midiNote }.count)")
+    }
+    
     // MARK: - Grid Interaction Logic
 
     /// Adds a sample to a specific layer/RR slot, forcing its velocity to match the layer.

@@ -14,5 +14,13 @@ struct AbletonSamplerApp: App {
                 .environmentObject(viewModel) 
                 .environmentObject(midiManager)
         }
+        .commands {
+            CommandGroup(replacing: .saveItem) {
+                Button("Export ADV File...") {
+                    viewModel.saveAdvFile()
+                }
+                .keyboardShortcut("S", modifiers: [.command])
+            }
+        }
     }
 }

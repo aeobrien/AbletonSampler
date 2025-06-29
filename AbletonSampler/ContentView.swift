@@ -14,6 +14,12 @@ struct SegmentationRequestInfo: Identifiable {
     let url: URL
     let note: Int
 }
+
+// --- NEW: Identifiable struct for Batch Import ---
+struct BatchImportInfo: Identifiable {
+    let id = UUID()
+    let urls: [URL]
+}
 // ---------------------------------------------------------------------
 
 struct ContentView: View {
@@ -46,6 +52,9 @@ struct ContentView: View {
 
     // --- State for MIDI Destination (currently unused in UI) ---
     @State private var selectedMidiDestinationEndpoint: MIDIEndpointRef? = nil
+    
+    // --- State for Batch Import ---
+    @State private var batchImportInfo: BatchImportInfo? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -85,6 +94,23 @@ struct ContentView: View {
                 )
                 .animation(.easeInOut(duration: 0.1), value: editorDropTargeted)
                 // -----------------------------------------------------
+                
+                // --- Batch Import Drop Zone ---
+                VStack {
+                    HStack {
+                        Image(systemName: "doc.on.doc.fill")
+                            .font(.title3)
+                        Text("Drop Multiple Files")
+                            .font(.caption)
+                    }
+                }
+                .frame(width: 200, height: 50)
+                .background(Color.secondary.opacity(0.2))
+                .cornerRadius(8)
+                .padding(.vertical, 5)
+                .onDrop(of: [UTType.fileURL], isTargeted: .constant(false)) { providers in
+                    return handleBatchDrop(providers: providers)
+                }
 
             }
             .padding(.horizontal) // Padding for the whole HStack
@@ -195,6 +221,11 @@ struct ContentView: View {
             }
              */
         }
+        // --- Sheet for Batch Import ---
+        .sheet(item: $batchImportInfo) { info in
+            BatchImportView(fileURLs: info.urls)
+                .environmentObject(viewModel)
+        }
         // Removed the duplicate midiNoteName function from ContentView scope
         // Removed the KeyZoneView struct as it's no longer used
     }
@@ -253,6 +284,69 @@ struct ContentView: View {
             } else {
                 // Error messages are now shown earlier during processing
                 print("Editor Drop: No valid WAV URL collected or processed.")
+            }
+        }
+        return true
+    }
+    
+    // --- Drop Handler for Batch Import ---
+    private func handleBatchDrop(providers: [NSItemProvider]) -> Bool {
+        guard providers.count > 0 else { return false }
+        
+        var collectedURLs: [URL] = []
+        let dispatchGroup = DispatchGroup()
+        
+        print("Handling batch drop for \(providers.count) items...")
+        
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                dispatchGroup.enter()
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { (item, error) in
+                    defer { dispatchGroup.leave() }
+                    
+                    if let error = error {
+                        print("    Batch Drop Error loading item: \(error)")
+                        return
+                    }
+                    
+                    var fileURL: URL?
+                    if let urlData = item as? Data {
+                        fileURL = URL(dataRepresentation: urlData, relativeTo: nil)
+                    } else if let url = item as? URL {
+                        fileURL = url
+                    }
+                    
+                    if let url = fileURL, url.pathExtension.lowercased() == "wav" {
+                        print("    Batch Drop: Loaded WAV URL: \(url.path)")
+                        collectedURLs.append(url)
+                    } else if let url = fileURL {
+                        print("    Batch Drop: Skipping non-WAV file: \(url.lastPathComponent)")
+                    }
+                }
+            }
+        }
+        
+        dispatchGroup.notify(queue: .main) {
+            if !collectedURLs.isEmpty {
+                print("Batch Drop: Collected \(collectedURLs.count) WAV files")
+                
+                // Check if files have naming patterns
+                let parsedSamples = FileNameParser.parseBatch(fileURLs: collectedURLs)
+                let hasNamedSamples = parsedSamples.contains { $0.midiNote != nil }
+                
+                if hasNamedSamples || collectedURLs.count > 4 {
+                    // Show batch import UI for named files or many files
+                    print("Setting up batch import with \(collectedURLs.count) URLs")
+                    self.batchImportInfo = BatchImportInfo(urls: collectedURLs)
+                } else {
+                    // For a few unnamed files, just import them normally
+                    print("No naming patterns detected, importing directly")
+                    // This would drop all files onto the root level (no specific note)
+                    viewModel.showError("Please drop files with naming patterns (e.g., Sample_C3_v0-127.wav) or drop them directly onto piano keys.")
+                }
+            } else {
+                print("Batch Drop: No valid WAV files collected")
+                viewModel.showError("No valid WAV files found in the dropped items.")
             }
         }
         return true

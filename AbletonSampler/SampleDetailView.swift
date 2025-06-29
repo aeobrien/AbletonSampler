@@ -243,6 +243,7 @@ struct SampleDetailView: View {
         }
     }
     @State private var detailDropTargeted: Bool = false
+    @State private var sampleForLoopEditing: MultiSamplePartData? = nil
 
     // --- NEW: State for Waveform Display (Adapted from AudioSegmentEditorView) ---
     @State private var audioFile: AVAudioFile? = nil // Keep track of the loaded file for context
@@ -287,6 +288,24 @@ struct SampleDetailView: View {
                   waveformViewID = UUID()
              }
              */
+             .sheet(item: $sampleForLoopEditing) { sampleToEdit in
+                 let totalFrames = sampleToEdit.originalFileFrameCount ?? sampleToEdit.segmentEndSample
+                 LoopEditorView(
+                     samplePart: Binding(
+                         get: { sampleToEdit },
+                         set: { updatedSample in
+                             // Update the sample in the view model
+                             viewModel.updateSampleLoopPoints(sampleID: updatedSample.id, updatedSample: updatedSample)
+                             // Update our local state if it's the same sample
+                             if selectedSampleForDetails?.id == updatedSample.id {
+                                 selectedSampleForDetails = updatedSample
+                             }
+                         }
+                     ),
+                     audioFileURL: sampleToEdit.sourceFileURL,
+                     totalFrames: totalFrames
+                 )
+             }
     }
 
     @ViewBuilder
@@ -363,6 +382,10 @@ struct SampleDetailView: View {
         // --- NEW Grid Logic based on VelocityLayer --- 
         let velocityLayers = viewModel.velocityLayers(for: midiNote)
         let maxRoundRobins = viewModel.noteRoundRobinConfiguration[midiNote] ?? 1
+        let numLayers = viewModel.noteLayerConfiguration[midiNote] ?? 1
+        
+        // Debug output
+        let _ = print("GridView for note \(midiNote): velocityLayers.count=\(velocityLayers.count), numLayers=\(numLayers), maxRR=\(maxRoundRobins)")
         
         GeometryReader { geometry in
             let totalHeight = geometry.size.height
@@ -576,6 +599,18 @@ struct SampleDetailView: View {
                 EditableVelocityView(viewModel: self.viewModel, sample: sample, midiNote: midiNote)
                 // --- End USE THE NEW STRUCT ---
 
+                // --- Loop Editor Button ---
+                Divider()
+                Button(action: {
+                    print("Edit Loop Points button clicked for sample: \(sample.name), ID: \(sample.id)")
+                    sampleForLoopEditing = sample
+                }) {
+                    HStack {
+                        Image(systemName: "repeat.circle")
+                        Text("Edit Loop Points")
+                    }
+                }
+                .buttonStyle(.bordered)
 
                 // --- Waveform Display Area ---
                 Text("Waveform:")
