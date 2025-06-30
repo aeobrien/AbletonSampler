@@ -94,6 +94,8 @@ struct GroupRegionView: View {
     @State private var dragOffset: CGFloat = 0
     @State private var isResizingStart = false
     @State private var isResizingEnd = false
+    @State private var initialStartFrame: Int64 = 0
+    @State private var initialEndFrame: Int64 = 0
     
     private var xPosition: CGFloat {
         let progress = CGFloat(group.startFrame) / CGFloat(totalFrames)
@@ -141,16 +143,18 @@ struct GroupRegionView: View {
                             DragGesture()
                                 .onChanged { value in
                                     if !isResizingStart && !isResizingEnd {
-                                        isDragging = true
-                                        dragOffset = value.translation.width
+                                        if !isDragging {
+                                            isDragging = true
+                                            initialStartFrame = group.startFrame
+                                            initialEndFrame = group.endFrame
+                                        }
+                                        // Update position continuously during drag
+                                        applyDrag(offset: value.translation.width)
                                     }
                                 }
-                                .onEnded { value in
-                                    if isDragging {
-                                        applyDrag(offset: value.translation.width)
-                                        isDragging = false
-                                        dragOffset = 0
-                                    }
+                                .onEnded { _ in
+                                    isDragging = false
+                                    dragOffset = 0
                                 }
                         )
                     
@@ -164,7 +168,11 @@ struct GroupRegionView: View {
                             .gesture(
                                 DragGesture()
                                     .onChanged { value in
-                                        isResizingStart = true
+                                        if !isResizingStart {
+                                            isResizingStart = true
+                                            initialStartFrame = group.startFrame
+                                            initialEndFrame = group.endFrame
+                                        }
                                         resizeStart(offset: value.translation.width)
                                     }
                                     .onEnded { _ in
@@ -180,7 +188,11 @@ struct GroupRegionView: View {
                             .gesture(
                                 DragGesture()
                                     .onChanged { value in
-                                        isResizingEnd = true
+                                        if !isResizingEnd {
+                                            isResizingEnd = true
+                                            initialStartFrame = group.startFrame
+                                            initialEndFrame = group.endFrame
+                                        }
                                         resizeEnd(offset: value.translation.width)
                                     }
                                     .onEnded { _ in
@@ -206,24 +218,37 @@ struct GroupRegionView: View {
     }
     
     private func applyDrag(offset: CGFloat) {
-        let frameOffset = Int64(offset / (geometry.size.width * timeZoomScale) * CGFloat(totalFrames))
+        // The offset is in screen coordinates, need to convert to frame coordinates
+        let totalZoomedWidth = geometry.size.width * timeZoomScale
+        let frameOffset = Int64((offset / totalZoomedWidth) * CGFloat(totalFrames))
         var updatedGroup = group
-        updatedGroup.startFrame = max(0, group.startFrame + frameOffset)
-        updatedGroup.endFrame = min(totalFrames, group.endFrame + frameOffset)
+        // Use initial positions to calculate new positions
+        updatedGroup.startFrame = max(0, initialStartFrame + frameOffset)
+        updatedGroup.endFrame = min(totalFrames, initialEndFrame + frameOffset)
         onUpdate(updatedGroup)
     }
     
     private func resizeStart(offset: CGFloat) {
-        let frameOffset = Int64(offset / (geometry.size.width * timeZoomScale) * CGFloat(totalFrames))
+        // The offset is in screen coordinates, need to convert to frame coordinates
+        // Divide by the total zoomed width to get the fraction of the audio file
+        let totalZoomedWidth = geometry.size.width * timeZoomScale
+        let frameOffset = Int64((offset / totalZoomedWidth) * CGFloat(totalFrames))
         var updatedGroup = group
-        updatedGroup.startFrame = max(0, min(group.endFrame - 1000, group.startFrame + frameOffset))
+        // Use initialStartFrame as the base, not the current position
+        updatedGroup.startFrame = max(0, min(initialEndFrame - 1000, initialStartFrame + frameOffset))
+        updatedGroup.endFrame = initialEndFrame // Keep end frame at initial position
         onUpdate(updatedGroup)
     }
     
     private func resizeEnd(offset: CGFloat) {
-        let frameOffset = Int64(offset / (geometry.size.width * timeZoomScale) * CGFloat(totalFrames))
+        // The offset is in screen coordinates, need to convert to frame coordinates
+        // Divide by the total zoomed width to get the fraction of the audio file
+        let totalZoomedWidth = geometry.size.width * timeZoomScale
+        let frameOffset = Int64((offset / totalZoomedWidth) * CGFloat(totalFrames))
         var updatedGroup = group
-        updatedGroup.endFrame = min(totalFrames, max(group.startFrame + 1000, group.endFrame + frameOffset))
+        updatedGroup.startFrame = initialStartFrame // Keep start frame at initial position
+        // Use initialEndFrame as the base, not the current position
+        updatedGroup.endFrame = min(totalFrames, max(initialStartFrame + 1000, initialEndFrame + frameOffset))
         onUpdate(updatedGroup)
     }
 }
@@ -239,6 +264,7 @@ struct TransientMarkerView: View {
     let onUpdate: (Int64) -> Void
     
     @State private var isDragging = false
+    @State private var initialFramePosition: Int64 = 0
     
     private var xPosition: CGFloat {
         let progress = CGFloat(transient.framePosition) / CGFloat(totalFrames)
@@ -252,8 +278,9 @@ struct TransientMarkerView: View {
     }
     
     var body: some View {
-        // Check if the marker is visible
-        let isVisible = xPosition > -50 && xPosition < (geometry.size.width + 50)
+        // Check if the marker is visible - use same buffer calculation as groups
+        let visibilityBuffer = max(1000, geometry.size.width * timeZoomScale)
+        let isVisible = xPosition > -visibilityBuffer && xPosition < (geometry.size.width + visibilityBuffer)
         
         Group {
             if isVisible {
@@ -275,10 +302,15 @@ struct TransientMarkerView: View {
                 .gesture(
                     DragGesture()
                         .onChanged { value in
-                            isDragging = true
-                            let newX = xPosition + value.translation.width
-                            let adjustedX = newX + scrollOffset.x
-                            let newFrame = Int64((adjustedX / (geometry.size.width * timeZoomScale)) * CGFloat(totalFrames))
+                            if !isDragging {
+                                isDragging = true
+                                initialFramePosition = transient.framePosition
+                            }
+                            
+                            // Calculate new position based on initial position + drag offset
+                            let totalZoomedWidth = geometry.size.width * timeZoomScale
+                            let frameOffset = Int64((value.translation.width / totalZoomedWidth) * CGFloat(totalFrames))
+                            let newFrame = initialFramePosition + frameOffset
                             
                             // Constrain to group bounds
                             let constrainedFrame = min(max(group.startFrame, newFrame), group.endFrame)

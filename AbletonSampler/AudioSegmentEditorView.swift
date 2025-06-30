@@ -88,6 +88,7 @@ struct AudioSegmentEditorView: View {
     // --- NEW: State for Waveform Zoom and Pan ---
     @State private var amplitudeScale: CGFloat = 1.0 // Vertical scaling
     @State private var timeZoomScale: CGFloat = 1.0 // Horizontal zoom (1.0 = no zoom)
+    @State private var zoomAnchorX: CGFloat? = nil
     @State private var scrollOffset: CGPoint = .zero // Current scroll position
     @State private var waveformViewID = UUID() // To force geometry reader update sometimes
     // ------------------------------------------
@@ -205,17 +206,10 @@ struct AudioSegmentEditorView: View {
 
                         ScrollViewReader { scrollProxy in
                             ScrollView(.horizontal, showsIndicators: true) { // Always allow scroll gestures, disable based on zoom
-                                    
-                                    ZStack(alignment: .leading) {
-                                        // Background with anchor points
-                                        HStack(spacing: 0) {
-                                            ForEach(0..<100, id: \.self) { index in
-                                                Color.secondary.opacity(0.4)
-                                                    .frame(width: totalContentWidth / 100.0)
-                                                    .id("scrollAnchor\(index)")
-                                            }
-                                        }
-                                        .frame(width: totalContentWidth, height: geometry.size.height)
+                                ZStack(alignment: .leading) {
+                                        // Background
+                                        Color.secondary.opacity(0.4)
+                                            .frame(width: totalContentWidth, height: geometry.size.height)
 
                                     // --- Waveform Canvas ---
                                     if isLoadingWaveform {
@@ -326,6 +320,14 @@ struct AudioSegmentEditorView: View {
                                             .overlay(Text("Could not load waveform").foregroundColor(.white))
                                             .frame(width: geometry.size.width, height: geometry.size.height) // Ensure error message fills visible area
                                     } // End waveform drawing conditions
+                                    
+                                    // Add multiple anchor points for scrolling
+                                    ForEach(0..<100, id: \.self) { index in
+                                        Color.clear
+                                            .frame(width: 1, height: 1)
+                                            .position(x: CGFloat(index) * totalContentWidth / 100.0, y: geometry.size.height / 2)
+                                            .id("anchor\(index)")
+                                    }
                                 } // End ZStack
                                 .background(GeometryReader { geo in
                                     Color.clear.preference(key: ScrollOffsetPreferenceKey.self,
@@ -358,14 +360,13 @@ struct AudioSegmentEditorView: View {
                                     let clampedTarget = max(0, min(targetX, totalWidth - waveformWidth))
                                     let scrollFraction = clampedTarget / totalWidth
                                     let anchorIndex = max(0, min(anchorCount - 1, Int((scrollFraction * Double(anchorCount)).rounded())))
-                                    let anchorId = "scrollAnchor\(anchorIndex)"
+                                    let anchorId = "anchor\(anchorIndex)"
                                     
-                                    print("[ProgrammaticScroll] Target=\(String(format: "%.1f", targetX)), Clamped=\(String(format: "%.1f", clampedTarget)), Fraction=\(String(format: "%.3f", scrollFraction)), Anchor=\(anchorId)")
-                                    print("[ProgrammaticScroll] Current zoom=\(String(format: "%.2f", timeZoomScale)), totalWidth=\(String(format: "%.1f", totalWidth))")
+                                    print("[ProgrammaticScroll] Attempting to scroll to position \(String(format: "%.1f", targetX)) using \(anchorId)")
                                     
-                                    // Ensure ScrollView is enabled for programmatic scrolling
+                                    // Try to scroll to the anchor
                                     withAnimation(.easeInOut(duration: 0.3)) {
-                                        scrollProxy.scrollTo(anchorId, anchor: .leading)
+                                        scrollProxy.scrollTo(anchorId, anchor: .center)
                                     }
                                     
                                     // Reset the target after scrolling completes
@@ -379,19 +380,48 @@ struct AudioSegmentEditorView: View {
                     // <<< NO frame/clipped modifier here on GeometryReader >>>
 
                     // --- Horizontal Time Zoom Slider (AFTER GeometryReader) ---
+                    // --- Horizontal Time Zoom Slider (centre-preserving) ---
                     HStack {
                         Text("Zoom:")
-                        Slider(value: $timeZoomScale, in: 1.0...20.0)
-                            .onChange(of: timeZoomScale) { oldValue, newValue in
-                                print("[ZoomSlider] Zoom changed from \(String(format: "%.2f", oldValue)) to \(String(format: "%.2f", newValue))")
-                                // Reset scroll offset when zoom returns to 1.0
-                                if newValue <= 1.0 && oldValue > 1.0 {
-                                    scrollOffset = .zero
-                                    print("[ZoomSlider] Reset scroll offset to 0 (zoom returned to 1.0)")
+                        
+                        Slider(
+                            value: $timeZoomScale,
+                            in: 1.0...20.0,
+                            onEditingChanged: { editing in
+                                // Capture the visible centre when the user first touches the slider
+                                if editing {
+                                    zoomAnchorX = -scrollOffset.x + waveformWidth / 2
+                                } else {
+                                    zoomAnchorX = nil       // finger lifted – stop locking to centre
                                 }
                             }
+                        )
+                        .onChange(of: timeZoomScale) { oldZoom, newZoom in
+                            guard let anchor = zoomAnchorX,
+                                  waveformWidth > 0,
+                                  oldZoom != newZoom else { return }
+                            
+                            // Fraction of the file that the anchor represents before the zoom
+                            let anchorFraction = anchor / (waveformWidth * oldZoom)
+                            
+                            // New content width after zoom
+                            let newContentWidth = waveformWidth * newZoom
+                            
+                            // Where that same fraction is now
+                            let newAnchorX = anchorFraction * newContentWidth
+                            
+                            // Scroll so that newAnchorX ends up in the middle of the visible area
+                            let desiredScroll = newAnchorX - waveformWidth / 2
+                            let clamped = max(0, min(desiredScroll, newContentWidth - waveformWidth))
+                            
+                            programmaticScrollTarget = clamped
+                        }
+                        
                         Text(String(format: "%.1fx", timeZoomScale))
                     }
+                    .padding(.top, 5)
+                    .disabled(isLoadingWaveform || waveformRMSData.isEmpty)
+                    // -----------------------------------------------------
                     .padding(.top, 5)
                     .disabled(isLoadingWaveform || waveformRMSData.isEmpty)
                     // ------------------------------------
