@@ -1664,6 +1664,79 @@ class SamplerViewModel: ObservableObject {
         print("  Total samples for note \(midiNote): \(multiSampleParts.filter { $0.keyRangeMin == midiNote }.count)")
     }
     
+    // MARK: - Groups Import Support
+    
+    /// Simple audio segment structure for groups
+    struct AudioSegment {
+        let startFrame: Int64
+        let endFrame: Int64
+        let sampleRate: Double
+    }
+    
+    /// Imports segments from groups with specific velocity layer and round robin configuration
+    func importGroupSegments(segments: [AudioSegment], targetNote: Int, velocityLayers: Int, roundRobins: Int, sourceURL: URL) {
+        print("Importing \(segments.count) segments from groups to note \(targetNote)")
+        print("Configuration: \(velocityLayers) velocity layers, \(roundRobins) round robins")
+        
+        // Set configuration for the target note
+        noteLayerConfiguration[targetNote] = velocityLayers
+        noteRoundRobinConfiguration[targetNote] = roundRobins
+        
+        // Clear existing samples for this note
+        multiSampleParts.removeAll { $0.keyRangeMin == targetNote }
+        
+        // Calculate velocity ranges for the layers
+        let velocityRanges = calculateSeparateVelocityRanges(numberOfFiles: velocityLayers)
+        
+        // Import each segment
+        for (index, segment) in segments.enumerated() {
+            // Determine velocity layer and round robin index
+            let velocityLayerIndex = index / roundRobins
+            let roundRobinIndex = index % roundRobins
+            
+            guard velocityLayerIndex < velocityLayers else {
+                print("Warning: Segment \(index) exceeds configured velocity layers")
+                break
+            }
+            
+            let velocityRange = velocityRanges[velocityLayerIndex]
+            
+            // Extract metadata from the source file
+            guard let metadata = extractAudioMetadata(fileURL: sourceURL) else {
+                print("Warning: Could not extract metadata for \(sourceURL.lastPathComponent)")
+                continue
+            }
+            
+            // Create the sample part
+            let partData = MultiSamplePartData(
+                name: "\(sourceURL.deletingPathExtension().lastPathComponent)_seg\(index + 1)",
+                keyRangeMin: targetNote,
+                keyRangeMax: targetNote,
+                velocityRange: velocityRange,
+                sourceFileURL: sourceURL,
+                segmentStartSample: segment.startFrame,
+                segmentEndSample: segment.endFrame,
+                relativePath: nil,
+                absolutePath: sourceURL.path,
+                originalAbsolutePath: sourceURL.path,
+                sampleRate: segment.sampleRate,
+                fileSize: metadata.fileSize,
+                crc: nil,
+                lastModDate: metadata.lastModDate,
+                originalFileFrameCount: metadata.frameCount
+            )
+            
+            multiSampleParts.append(partData)
+        }
+        
+        // Update piano key to show it has samples
+        if let keyIndex = pianoKeys.firstIndex(where: { $0.id == targetNote }) {
+            pianoKeys[keyIndex].hasSample = true
+        }
+        
+        print("Groups import complete: imported \(segments.count) segments")
+    }
+    
     // MARK: - Grid Interaction Logic
 
     /// Adds a sample to a specific layer/RR slot, forcing its velocity to match the layer.

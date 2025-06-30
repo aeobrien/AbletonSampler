@@ -28,6 +28,9 @@
 		DDFCB83E2E11C0A40085F0AE /* LoopEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFCB83D2E11C0A40085F0AE /* LoopEditorView.swift */; };
 		DDFCB8412E11C9830085F0AE /* BatchImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFCB83F2E11C9830085F0AE /* BatchImportView.swift */; };
 		DDFCB8422E11C9830085F0AE /* FileNameParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFCB8402E11C9830085F0AE /* FileNameParser.swift */; };
+		DDFCB8462E11E0020085F0AE /* TransientGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFCB8452E11E0020085F0AE /* TransientGroup.swift */; };
+		DDFCB8472E11E0020085F0AE /* GroupOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFCB8442E11E0020085F0AE /* GroupOverlayView.swift */; };
+		DDFCB8482E11E0020085F0AE /* GroupManagementPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFCB8432E11E0020085F0AE /* GroupManagementPanel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -71,6 +74,9 @@
 		DDFCB83D2E11C0A40085F0AE /* LoopEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopEditorView.swift; sourceTree = "<group>"; };
 		DDFCB83F2E11C9830085F0AE /* BatchImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatchImportView.swift; sourceTree = "<group>"; };
 		DDFCB8402E11C9830085F0AE /* FileNameParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileNameParser.swift; sourceTree = "<group>"; };
+		DDFCB8432E11E0020085F0AE /* GroupManagementPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupManagementPanel.swift; sourceTree = "<group>"; };
+		DDFCB8442E11E0020085F0AE /* GroupOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupOverlayView.swift; sourceTree = "<group>"; };
+		DDFCB8452E11E0020085F0AE /* TransientGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransientGroup.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -131,6 +137,9 @@
 		DD7A8D3D2DB56B6400B3363E /* AbletonSampler */ = {
 			isa = PBXGroup;
 			children = (
+				DDFCB8432E11E0020085F0AE /* GroupManagementPanel.swift */,
+				DDFCB8442E11E0020085F0AE /* GroupOverlayView.swift */,
+				DDFCB8452E11E0020085F0AE /* TransientGroup.swift */,
 				DDFCB83F2E11C9830085F0AE /* BatchImportView.swift */,
 				DDFCB8402E11C9830085F0AE /* FileNameParser.swift */,
 				DD7A8D472DB56B6600B3363E /* AbletonSampler.entitlements */,
@@ -328,6 +337,9 @@
 				DD7A8D712DB59B2000B3363E /* AudioSegmentEditorView.swift in Sources */,
 				DD7A8D3F2DB56B6400B3363E /* AbletonSamplerApp.swift in Sources */,
 				DDFCB8412E11C9830085F0AE /* BatchImportView.swift in Sources */,
+				DDFCB8462E11E0020085F0AE /* TransientGroup.swift in Sources */,
+				DDFCB8472E11E0020085F0AE /* GroupOverlayView.swift in Sources */,
+				DDFCB8482E11E0020085F0AE /* GroupManagementPanel.swift in Sources */,
 				DDFCB8422E11C9830085F0AE /* FileNameParser.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -489,6 +501,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = AbletonSampler/AbletonSampler.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -516,6 +529,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = AbletonSampler/AbletonSampler.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;

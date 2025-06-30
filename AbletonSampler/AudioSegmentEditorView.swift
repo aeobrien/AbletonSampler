@@ -70,6 +70,8 @@ struct AudioSegmentEditorView: View {
     // --- NEW: Store max RMS for auto-scaling ---
     @State private var maxRMSValue: Float = 0.001 // Avoid division by zero
     @State private var isLoadingWaveform = true
+    // --- NEW: Store raw audio data for transient detection ---
+    @State private var rawAudioData: [Float] = []
     
     // --- State for Markers & Segments ---
     @State private var markers: [Double] = [] // Sorted normalized positions (0.0-1.0)
@@ -93,6 +95,17 @@ struct AudioSegmentEditorView: View {
     // --- NEW: State for selecting the target layer for RR mapping ---
     @State private var selectedLayerIndex: Int = 0
     // --------------------------------------------------------------
+    
+    // --- NEW: State for Groups Mode ---
+    @State private var isGroupsMode: Bool = false
+    // --- NEW: Programmatic scroll position ---
+    @State private var programmaticScrollTarget: CGFloat? = nil
+    @State private var scrollViewProxy: ScrollViewProxy? = nil
+    @StateObject private var groupManager = TransientGroupManager()
+    @State private var isDraggingToCreateGroup = false
+    @State private var groupDragStart: CGFloat = 0
+    @State private var groupDragEnd: CGFloat = 0
+    // ---------------------------------
     
     // --- Computed property for the full MIDI range (0-127) ---
     private var availablePianoKeys: [PianoKey] {
@@ -150,6 +163,29 @@ struct AudioSegmentEditorView: View {
             Text("Editing: \(audioFileURL.lastPathComponent)")
                 .font(.caption)
                 .lineLimit(1)
+            
+            // --- Groups Assignment Toggle ---
+            HStack {
+                Spacer()
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isGroupsMode.toggle()
+                        if isGroupsMode {
+                            // Initialize group manager when entering groups mode
+                            groupManager.audioFileURL = audioFileURL
+                            groupManager.totalFrames = totalFrames ?? 0
+                            groupManager.sampleRate = audioFile?.processingFormat.sampleRate ?? 44100
+                        }
+                    }
+                }) {
+                    Label(isGroupsMode ? "Exit Groups" : "Groups Assignment", 
+                          systemImage: isGroupsMode ? "xmark.circle" : "rectangle.3.group")
+                }
+                .buttonStyle(.bordered)
+                .tint(isGroupsMode ? .red : .accentColor)
+                Spacer()
+            }
+            .padding(.horizontal)
 
             // --- UPDATED: Waveform Display Area with Controls ---
             HStack(alignment: .center, spacing: 5) { // Use HStack for waveform + amplitude slider (Alignment is .center)
@@ -158,16 +194,28 @@ struct AudioSegmentEditorView: View {
                         // Update waveformWidth whenever geometry changes AND it's valid
                         let _ = DispatchQueue.main.async {
                             if self.waveformWidth != geometry.size.width && geometry.size.width > 0 {
+                                let oldWidth = self.waveformWidth
                                 self.waveformWidth = geometry.size.width
+                                if abs(oldWidth - geometry.size.width) > 0.1 {
+                                    print("[WaveformSize] Width changed from \(String(format: "%.1f", oldWidth)) to \(String(format: "%.1f", geometry.size.width))")
+                                }
                                 // print("Waveform Width updated via GeometryReader: \(self.waveformWidth)") // Optional debug
                             }
                         }
 
                         ScrollViewReader { scrollProxy in
                             ScrollView(.horizontal, showsIndicators: true) { // Always allow scroll gestures, disable based on zoom
-                                ZStack(alignment: .leading) {
-                                    // Background
-                                    Color.secondary.opacity(0.4)
+                                    
+                                    ZStack(alignment: .leading) {
+                                        // Background with anchor points
+                                        HStack(spacing: 0) {
+                                            ForEach(0..<100, id: \.self) { index in
+                                                Color.secondary.opacity(0.4)
+                                                    .frame(width: totalContentWidth / 100.0)
+                                                    .id("scrollAnchor\(index)")
+                                            }
+                                        }
+                                        .frame(width: totalContentWidth, height: geometry.size.height)
 
                                     // --- Waveform Canvas ---
                                     if isLoadingWaveform {
@@ -175,13 +223,70 @@ struct AudioSegmentEditorView: View {
                                             .frame(width: geometry.size.width, height: geometry.size.height) // Center in visible area
                                             .position(x: geometry.size.width / 2, y: geometry.size.height / 2) // Ensure it stays centered
                                     } else if !waveformRMSData.isEmpty && waveformWidth > 0 {
-                                        // --- CUSTOM WAVEFORM DRAWING ---
-                                        Canvas { context, size in
-                                            drawWaveform(context: &context, size: size)
+                                        ZStack(alignment: .leading) {
+                                            // --- CUSTOM WAVEFORM DRAWING ---
+                                            Canvas { context, size in
+                                                drawWaveform(context: &context, size: size)
+                                            }
+                                            .frame(width: totalContentWidth, height: geometry.size.height) // Canvas size matches content
+                                            .id("waveformCanvas") // ID for ScrollViewReader
+                                            // --- END CUSTOM WAVEFORM DRAWING ---
+                                            
+                                            // --- Groups Overlay ---
+                                            if isGroupsMode {
+                                                GroupOverlayView(
+                                                    groupManager: groupManager,
+                                                    totalFrames: totalFrames ?? 1,
+                                                    geometry: geometry,
+                                                    timeZoomScale: timeZoomScale,
+                                                    scrollOffset: scrollOffset
+                                                )
+                                                .frame(width: totalContentWidth, height: geometry.size.height)
+                                                .allowsHitTesting(true) // Enable interaction
+                                                
+                                                // Group creation drag overlay
+                                                if isDraggingToCreateGroup {
+                                                    Rectangle()
+                                                        .fill(Color.accentColor.opacity(0.3))
+                                                        .frame(
+                                                            width: abs(groupDragEnd - groupDragStart),
+                                                            height: geometry.size.height
+                                                        )
+                                                        .position(
+                                                            x: min(groupDragStart, groupDragEnd) + abs(groupDragEnd - groupDragStart) / 2,
+                                                            y: geometry.size.height / 2
+                                                        )
+                                                }
+                                            }
                                         }
-                                        .frame(width: totalContentWidth, height: geometry.size.height) // Canvas size matches content
-                                        .id("\(scrollOffset.x)-\(scrollOffset.y)") // Force redraw on scroll
-                                        // --- END CUSTOM WAVEFORM DRAWING ---
+                                        .gesture(
+                                            isGroupsMode ? DragGesture()
+                                                .onChanged { value in
+                                                    if !isDraggingToCreateGroup {
+                                                        isDraggingToCreateGroup = true
+                                                        groupDragStart = value.startLocation.x + scrollOffset.x
+                                                    }
+                                                    groupDragEnd = value.location.x + scrollOffset.x
+                                                }
+                                                .onEnded { value in
+                                                    if isDraggingToCreateGroup {
+                                                        let startFrame = Int64((groupDragStart / totalContentWidth) * CGFloat(totalFrames ?? 0))
+                                                        let endFrame = Int64((groupDragEnd / totalContentWidth) * CGFloat(totalFrames ?? 0))
+                                                        
+                                                        if abs(endFrame - startFrame) > 1000 { // Minimum size
+                                                            let group = groupManager.createGroup(
+                                                                startFrame: min(startFrame, endFrame),
+                                                                endFrame: max(startFrame, endFrame)
+                                                            )
+                                                            print("[GroupCreate] Created group '\(group.name)' frames=\(group.startFrame)-\(group.endFrame), dragStart=\(String(format: "%.1f", groupDragStart)), dragEnd=\(String(format: "%.1f", groupDragEnd)), contentWidth=\(String(format: "%.1f", totalContentWidth))")
+                                                        }
+                                                        
+                                                        isDraggingToCreateGroup = false
+                                                        groupDragStart = 0
+                                                        groupDragEnd = 0
+                                                    }
+                                                } : nil
+                                        )
 
                                         // --- UPDATED: Display Markers ---
                                         ForEach(markers, id: \.self) { markerPosition in
@@ -229,10 +334,45 @@ struct AudioSegmentEditorView: View {
                                 .contentShape(Rectangle()) // Make tappable
                             } // End ScrollView
                             .coordinateSpace(name: "scrollView")
-                            .scrollDisabled(timeZoomScale <= 1.0) // Disable scrolling if not zoomed
+                            .scrollDisabled(timeZoomScale <= 1.0 && programmaticScrollTarget == nil) // Disable scrolling if not zoomed (unless programmatic)
                             .onPreferenceChange(ScrollOffsetPreferenceKey.self) { newOffset in
+                                let oldOffset = self.scrollOffset
                                 self.scrollOffset = newOffset
-                                // print("Scroll Offset Updated via PrefKey: \(newOffset)") // Optional debug
+                                if abs(oldOffset.x - newOffset.x) > 0.1 { // Only log significant changes
+                                    print("[Scroll] Offset changed from \(String(format: "%.1f", oldOffset.x)) to \(String(format: "%.1f", newOffset.x))")
+                                }
+                            }
+                            .onChange(of: timeZoomScale) { oldZoom, newZoom in
+                                // Force a small delay when zoom changes to ensure content size updates
+                                if oldZoom != newZoom {
+                                    print("[ZoomChange] Zoom changed from \(String(format: "%.2f", oldZoom)) to \(String(format: "%.2f", newZoom))")
+                                }
+                            }
+                            .onChange(of: programmaticScrollTarget) { oldValue, newValue in
+                                if let targetX = newValue, targetX >= 0 {
+                                    // Calculate which anchor to scroll to
+                                    let anchorCount = 100
+                                    let totalWidth = waveformWidth * timeZoomScale
+                                    
+                                    // Ensure we're within bounds
+                                    let clampedTarget = max(0, min(targetX, totalWidth - waveformWidth))
+                                    let scrollFraction = clampedTarget / totalWidth
+                                    let anchorIndex = max(0, min(anchorCount - 1, Int((scrollFraction * Double(anchorCount)).rounded())))
+                                    let anchorId = "scrollAnchor\(anchorIndex)"
+                                    
+                                    print("[ProgrammaticScroll] Target=\(String(format: "%.1f", targetX)), Clamped=\(String(format: "%.1f", clampedTarget)), Fraction=\(String(format: "%.3f", scrollFraction)), Anchor=\(anchorId)")
+                                    print("[ProgrammaticScroll] Current zoom=\(String(format: "%.2f", timeZoomScale)), totalWidth=\(String(format: "%.1f", totalWidth))")
+                                    
+                                    // Ensure ScrollView is enabled for programmatic scrolling
+                                    withAnimation(.easeInOut(duration: 0.3)) {
+                                        scrollProxy.scrollTo(anchorId, anchor: .leading)
+                                    }
+                                    
+                                    // Reset the target after scrolling completes
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                        self.programmaticScrollTarget = nil
+                                    }
+                                }
                             }
                         } // End ScrollViewReader (NOTE: ScrollView ends inside this)
                     } // End GeometryReader (geometry)
@@ -242,6 +382,14 @@ struct AudioSegmentEditorView: View {
                     HStack {
                         Text("Zoom:")
                         Slider(value: $timeZoomScale, in: 1.0...20.0)
+                            .onChange(of: timeZoomScale) { oldValue, newValue in
+                                print("[ZoomSlider] Zoom changed from \(String(format: "%.2f", oldValue)) to \(String(format: "%.2f", newValue))")
+                                // Reset scroll offset when zoom returns to 1.0
+                                if newValue <= 1.0 && oldValue > 1.0 {
+                                    scrollOffset = .zero
+                                    print("[ZoomSlider] Reset scroll offset to 0 (zoom returned to 1.0)")
+                                }
+                            }
                         Text(String(format: "%.1fx", timeZoomScale))
                     }
                     .padding(.top, 5)
@@ -264,56 +412,87 @@ struct AudioSegmentEditorView: View {
             // <<< NO .padding(.horizontal) here >>>
             // --------------------------------------------------
 
-            // --- Marker Controls ---
-            HStack {
-                Button("Clear All Markers") {
-                    markers.removeAll()
-                    originalTransientIndices = []
-                    markerOriginalIndexMap = [:]
-                    selectedSegmentIndex = nil
+            // --- Mode-specific Controls ---
+            if !isGroupsMode {
+                // Standard marker controls
+                HStack {
+                    Button("Clear All Markers") {
+                        markers.removeAll()
+                        originalTransientIndices = []
+                        markerOriginalIndexMap = [:]
+                        selectedSegmentIndex = nil
+                    }
+                    .disabled(markers.isEmpty)
+
+                    // Spacer() // Optional: Removed earlier, keep removed? Or add back for layout? Let's keep it removed for now.
+
+                    // --- UPDATED: Transient Detection Controls ---
+                    VStack(alignment: .trailing, spacing: 5) {
+                        HStack {
+                            Text("Sensitivity:")
+                            Slider(value: $transientThreshold, in: 0.01...1.0)
+                                .frame(width: 100)
+                        }
+                        .font(.caption)
+
+                        HStack {
+                            Text("Pre-detect Samples:")
+                            Stepper("\(transientPreemptSamples)", value: $transientPreemptSamples, in: 0...20)
+                        }
+                        .font(.caption)
+
+                        Button("Detect Transients") {
+                            detectAndSetTransients()
+                        }
+                        .disabled(isLoadingWaveform || waveformRMSData.isEmpty)
+                    } // End Transient VStack
+                } // End Marker Controls HStack
+                .padding(.horizontal) // Add horizontal padding here for the controls section
+            } else {
+                // Groups mode controls
+                if let selectedGroup = groupManager.groups.first(where: { $0.id == groupManager.selectedGroupId }) {
+                    VStack(spacing: 10) {
+                        GroupDetailView(
+                            group: selectedGroup,
+                            groupManager: groupManager,
+                            audioFile: audioFile,
+                            waveformRMSData: waveformRMSData,
+                            rawAudioData: rawAudioData,
+                            totalFrames: totalFrames
+                        )
+                        
+                        // Zoom to group button
+                        Button("Zoom to Group") {
+                            zoomToGroup(selectedGroup)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.horizontal)
+                } else {
+                    Text("Click and drag on the waveform to create a group")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding()
                 }
-                .disabled(markers.isEmpty)
-
-                // Spacer() // Optional: Removed earlier, keep removed? Or add back for layout? Let's keep it removed for now.
-
-                // --- UPDATED: Transient Detection Controls ---
-                VStack(alignment: .trailing, spacing: 5) {
-                    HStack {
-                        Text("Sensitivity:")
-                        Slider(value: $transientThreshold, in: 0.01...1.0)
-                            .frame(width: 100)
-                    }
-                    .font(.caption)
-
-                    HStack {
-                        Text("Pre-detect Samples:")
-                        Stepper("\(transientPreemptSamples)", value: $transientPreemptSamples, in: 0...20)
-                    }
-                    .font(.caption)
-
-                    Button("Detect Transients") {
-                        detectAndSetTransients()
-                    }
-                    .disabled(isLoadingWaveform || waveformRMSData.isEmpty)
-                } // End Transient VStack
-            } // End Marker Controls HStack
-            .padding(.horizontal) // Add horizontal padding here for the controls section
+            }
 
             // --- Segment Information & Mapping ---
-            Text(audioInfo)
-                .font(.footnote)
+            if !isGroupsMode {
+                Text(audioInfo)
+                    .font(.footnote)
 
-            Text("Segments Defined: \(numberOfSegments)")
-                .font(.footnote)
+                Text("Segments Defined: \(numberOfSegments)")
+                    .font(.footnote)
 
-            // --- DEBUG: Show Scroll Offset ---
-            Text("Scroll Offset: (\(String(format: "%.1f", scrollOffset.x)), \(String(format: "%.1f", scrollOffset.y)))")
-                .font(.caption)
-                .foregroundColor(.orange)
-            // --- END DEBUG ---
+                // --- DEBUG: Show Scroll Offset ---
+                Text("Scroll Offset: (\(String(format: "%.1f", scrollOffset.x)), \(String(format: "%.1f", scrollOffset.y)))")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                // --- END DEBUG ---
+            }
 
             // --- CONDITIONAL MAPPING CONTROLS ---
-            if targetNoteOverride == nil {
+            if !isGroupsMode && targetNoteOverride == nil {
                 Text("Auto-Mapping (All Segments)").font(.headline)
                 HStack {
                     Text("Map Sequentially starting at note:")
@@ -374,7 +553,7 @@ struct AudioSegmentEditorView: View {
                     .disabled(markers.isEmpty && numberOfSegments <= 1)
                 }
 
-            } else {
+            } else if !isGroupsMode {
                 // --- Restricted Editor Mode (targetNoteOverride is set) ---
                 let fixedTargetNote = targetNoteOverride!
                 Text("Map Segments to Note \(fixedTargetNote)").font(.headline)
@@ -425,6 +604,14 @@ struct AudioSegmentEditorView: View {
                     dismiss()
                 }
                 Spacer()
+                
+                if isGroupsMode && !groupManager.groups.isEmpty {
+                    Button("Export Groups") {
+                        exportGroups()
+                    }
+                    .buttonStyle(.bordered)
+                }
+                
                 Button("Done") {
                     dismiss()
                 }
@@ -473,6 +660,7 @@ struct AudioSegmentEditorView: View {
         // Reset state
         isLoadingWaveform = true
         waveformRMSData = []
+        rawAudioData = []
         markers = []
         markerOriginalIndexMap = [:]
         audioFile = nil
@@ -531,6 +719,8 @@ struct AudioSegmentEditorView: View {
             // Ensure frameLength is used for the count
             let audioDataCopy = [Float](UnsafeBufferPointer(start: channelPtr, count: frameLength))
             print("Copied \(audioDataCopy.count) audio samples for background processing.")
+            // Store raw audio data for later use
+            self.rawAudioData = audioDataCopy
             // --- End Copy ---
 
 
@@ -1044,6 +1234,13 @@ struct AudioSegmentEditorView: View {
 
     // --- NEW: Waveform Drawing Function (Simplified) ---
     private func drawWaveform(context: inout GraphicsContext, size: CGSize) {
+        // Debug log every 10th call to reduce spam
+        struct DrawCounter { static var count = 0 }
+        DrawCounter.count += 1
+        if DrawCounter.count % 10 == 0 {
+            print("[DrawWaveform] size=\(String(format: "%.1fx%.1f", size.width, size.height)), zoom=\(String(format: "%.2f", timeZoomScale)), scroll=\(String(format: "%.1f", scrollOffset.x))")
+        }
+        
         // --- GUARD CHECKS ---
         // Ensure we have data, valid dimensions, and a positive total content width
         guard !waveformRMSData.isEmpty, size.width > 0, size.height > 0, totalContentWidth > 0 else {
@@ -1137,6 +1334,262 @@ struct AudioSegmentEditorView: View {
         context.stroke(path, with: .color(.accentColor), lineWidth: 1)
     }
     // --- END Simplified Waveform Drawing ---
+    
+    // MARK: - Groups Export
+    
+    private func exportGroups() {
+        let groupSegments = groupManager.generateSegments()
+        
+        for (group, segments) in groupSegments {
+            guard let targetNote = group.targetMidiNote else {
+                print("Skipping group '\(group.name)' - no target note assigned")
+                continue
+            }
+            
+            // Convert SampleSegments to AudioSegments
+            let audioSegments = segments.map { segment in
+                SamplerViewModel.AudioSegment(
+                    startFrame: segment.startFrame,
+                    endFrame: segment.endFrame,
+                    sampleRate: audioFile?.processingFormat.sampleRate ?? 44100
+                )
+            }
+            
+            // Map segments to the target note with velocity layers and round robins
+            viewModel.importGroupSegments(
+                segments: audioSegments,
+                targetNote: targetNote,
+                velocityLayers: group.velocityLayers,
+                roundRobins: group.roundRobins,
+                sourceURL: audioFileURL
+            )
+        }
+        
+        dismiss()
+    }
+    
+    // Zoom to group function
+    private func zoomToGroup(_ group: TransientGroup) {
+        guard let totalFrames = totalFrames, totalFrames > 0, waveformWidth > 0 else { 
+            print("[ZoomToGroup] Failed - invalid state: totalFrames=\(totalFrames ?? 0), waveformWidth=\(waveformWidth)")
+            return 
+        }
+        
+        print("[ZoomToGroup] START - group '\(group.name)' frames=\(group.startFrame)-\(group.endFrame)")
+        print("[ZoomToGroup] Initial state: zoom=\(String(format: "%.2f", timeZoomScale)), scroll=\(String(format: "%.1f", scrollOffset.x)), waveformWidth=\(String(format: "%.1f", waveformWidth))")
+        
+        // Calculate the fraction of the total file that the group represents
+        let groupStartFraction = Double(group.startFrame) / Double(totalFrames)
+        let groupEndFraction = Double(group.endFrame) / Double(totalFrames)
+        let groupWidthFraction = groupEndFraction - groupStartFraction
+        
+        print("[ZoomToGroup] Group fractions: start=\(String(format: "%.4f", groupStartFraction)), end=\(String(format: "%.4f", groupEndFraction)), width=\(String(format: "%.4f", groupWidthFraction))")
+        
+        // Calculate zoom to fit group in 80% of view width
+        let targetZoom = min(20.0, max(1.0, 0.8 / groupWidthFraction))
+        
+        print("[ZoomToGroup] Target zoom calculation: 0.8 / \(String(format: "%.4f", groupWidthFraction)) = \(String(format: "%.2f", targetZoom))")
+        
+        // Update zoom first
+        timeZoomScale = targetZoom
+        
+        // Calculate the total content width after zoom
+        let totalContentWidth = waveformWidth * timeZoomScale
+        
+        print("[ZoomToGroup] After zoom: totalContentWidth=\(String(format: "%.1f", totalContentWidth)) (\(String(format: "%.1f", waveformWidth)) * \(String(format: "%.2f", timeZoomScale)))")
+        
+        // Calculate where the group center will be in the zoomed content
+        let groupCenterFraction = (groupStartFraction + groupEndFraction) / 2.0
+        let groupCenterX = groupCenterFraction * totalContentWidth
+        
+        print("[ZoomToGroup] Group center: fraction=\(String(format: "%.4f", groupCenterFraction)), x=\(String(format: "%.1f", groupCenterX))")
+        
+        // Calculate scroll to center the group in the view
+        let targetScrollX = groupCenterX - (waveformWidth / 2.0)
+        
+        // Clamp scroll to valid range
+        let maxScrollX = max(0, totalContentWidth - waveformWidth)
+        let finalScrollX = min(max(0, targetScrollX), maxScrollX)
+        
+        print("[ZoomToGroup] Scroll calculation: target=\(String(format: "%.1f", targetScrollX)), max=\(String(format: "%.1f", maxScrollX)), final=\(String(format: "%.1f", finalScrollX))")
+        
+        // Delay the scroll to allow the ScrollView to update after zoom change
+        // Use a longer delay to ensure layout has fully updated
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            self.programmaticScrollTarget = finalScrollX
+            print("[ZoomToGroup] Setting programmaticScrollTarget to \(String(format: "%.1f", finalScrollX)) after delay")
+        }
+        
+        print("[ZoomToGroup] END - Will set programmaticScrollTarget to \(String(format: "%.1f", finalScrollX)) after delay")
+    }
+}
+
+// MARK: - Group Detail View
+
+struct GroupDetailView: View {
+    let group: TransientGroup
+    @ObservedObject var groupManager: TransientGroupManager
+    let audioFile: AVAudioFile?
+    let waveformRMSData: [Float]
+    let rawAudioData: [Float]
+    let totalFrames: Int64?
+    
+    @State private var sensitivity: Double = 0.5
+    @State private var isDetectingTransients = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Group header
+            HStack {
+                Circle()
+                    .fill(Color(hex: group.color) ?? .blue)
+                    .frame(width: 12, height: 12)
+                
+                Text(group.name)
+                    .font(.headline)
+                
+                Spacer()
+                
+                Button(action: {
+                    groupManager.deleteGroup(group.id)
+                }) {
+                    Image(systemName: "trash")
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(.plain)
+            }
+            
+            Divider()
+            
+            // Configuration
+            HStack(spacing: 20) {
+                VStack(alignment: .leading) {
+                    Text("Velocity Layers")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Stepper("\(group.velocityLayers)", value: Binding(
+                        get: { group.velocityLayers },
+                        set: { newValue in
+                            var updatedGroup = group
+                            updatedGroup.velocityLayers = newValue
+                            groupManager.updateGroup(updatedGroup)
+                        }
+                    ), in: 1...16)
+                }
+                
+                VStack(alignment: .leading) {
+                    Text("Round Robins")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Stepper("\(group.roundRobins)", value: Binding(
+                        get: { group.roundRobins },
+                        set: { newValue in
+                            var updatedGroup = group
+                            updatedGroup.roundRobins = newValue
+                            groupManager.updateGroup(updatedGroup)
+                        }
+                    ), in: 1...16)
+                }
+                
+                VStack(alignment: .leading) {
+                    Text("Target Note")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Picker("", selection: Binding(
+                        get: { group.targetMidiNote },
+                        set: { newValue in
+                            var updatedGroup = group
+                            updatedGroup.targetMidiNote = newValue
+                            groupManager.updateGroup(updatedGroup)
+                        }
+                    )) {
+                        Text("Not Assigned").tag(nil as Int?)
+                        ForEach(0...127, id: \.self) { note in
+                            Text(midiNoteName(note))
+                                .tag(note as Int?)
+                        }
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                    .frame(width: 100)
+                }
+            }
+            
+            Divider()
+            
+            // Transient detection
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Transients: \(group.transients.count) / \(group.expectedSegments)")
+                    .font(.caption)
+                
+                HStack {
+                    Text("Sensitivity:")
+                        .font(.caption)
+                    
+                    Slider(value: $sensitivity, in: 0.01...1.0)
+                        .frame(width: 150)
+                    
+                    Button("Auto-Detect") {
+                        detectTransients()
+                    }
+                    .disabled(waveformRMSData.isEmpty || isDetectingTransients)
+                    
+                    if group.transients.count > 0 {
+                        Button("Clear") {
+                            var updatedGroup = group
+                            updatedGroup.transients.removeAll()
+                            groupManager.updateGroup(updatedGroup)
+                        }
+                    }
+                }
+            }
+            
+            if group.isComplete {
+                Label("Ready to export", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.green)
+            }
+        }
+        .padding()
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(8)
+    }
+    
+    private func detectTransients() {
+        isDetectingTransients = true
+        
+        // Convert sensitivity to threshold (inverted - higher sensitivity = lower threshold)
+        let threshold = Float(1.0 - sensitivity)
+        
+        // Extract RMS data for the group's range  
+        // Need to convert frame positions to RMS sample indices
+        let samplesPerRMSPoint = max(1, Int(totalFrames ?? 1) / waveformRMSData.count)
+        let startRMSIndex = Int(group.startFrame) / samplesPerRMSPoint
+        let endRMSIndex = min(Int(group.endFrame) / samplesPerRMSPoint, waveformRMSData.count)
+        
+        guard startRMSIndex >= 0 && startRMSIndex < endRMSIndex && endRMSIndex <= waveformRMSData.count else {
+            print("Invalid group range for transient detection: startRMS=\(startRMSIndex), endRMS=\(endRMSIndex), rmsCount=\(waveformRMSData.count)")
+            isDetectingTransients = false
+            return
+        }
+        
+        let groupRMSData = Array(waveformRMSData[startRMSIndex..<endRMSIndex])
+        print("Detecting transients in group '\(group.name)' with \(groupRMSData.count) RMS samples, threshold=\(threshold)")
+        
+        // Pass the samples per RMS point so transient positions can be converted back to frames
+        groupManager.autoDetectTransients(for: group.id, audioData: groupRMSData, threshold: threshold, samplesPerDataPoint: samplesPerRMSPoint)
+        
+        isDetectingTransients = false
+    }
+    
+    private func midiNoteName(_ note: Int) -> String {
+        let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        let octave = (note / 12) - 2
+        let noteIndex = note % 12
+        return "\(noteNames[noteIndex])\(octave)"
+    }
 }
 
 // --- Preview ---
