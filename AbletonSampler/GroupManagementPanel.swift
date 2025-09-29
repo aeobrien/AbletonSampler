@@ -158,7 +158,7 @@ struct GroupRowView: View {
     @State private var editedTargetNote: Int?
     
     private var color: Color {
-        Color(hex: group.color) ?? .blue
+        Color(group.color) ?? .blue
     }
     
     var body: some View {

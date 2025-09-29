@@ -31,6 +31,10 @@
 		DDFCB8462E11E0020085F0AE /* TransientGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFCB8452E11E0020085F0AE /* TransientGroup.swift */; };
 		DDFCB8472E11E0020085F0AE /* GroupOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFCB8442E11E0020085F0AE /* GroupOverlayView.swift */; };
 		DDFCB8482E11E0020085F0AE /* GroupManagementPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFCB8432E11E0020085F0AE /* GroupManagementPanel.swift */; };
+		364477910AEF47E096E165D5 /* GroupsAssignmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67F278990F6843FF8D52EAC3 /* GroupsAssignmentView.swift */; };
+		13F69843CF364560BE51177F /* EnhancedGroupOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFB603F6BB1A41C38670FDDB /* EnhancedGroupOverlayView.swift */; };
+		DDFCB8522E13189D0085F0AE /* ADVTemplate.xml in Resources */ = {isa = PBXBuildFile; fileRef = DDFCB8512E13189D0085F0AE /* ADVTemplate.xml */; };
+		DDFCB8552E1319AF0085F0AE /* Waveform in Frameworks */ = {isa = PBXBuildFile; productRef = DDFCB8542E1319AF0085F0AE /* Waveform */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -77,6 +81,9 @@
 		DDFCB8432E11E0020085F0AE /* GroupManagementPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupManagementPanel.swift; sourceTree = "<group>"; };
 		DDFCB8442E11E0020085F0AE /* GroupOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupOverlayView.swift; sourceTree = "<group>"; };
 		DDFCB8452E11E0020085F0AE /* TransientGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransientGroup.swift; sourceTree = "<group>"; };
+		67F278990F6843FF8D52EAC3 /* GroupsAssignmentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupsAssignmentView.swift; sourceTree = "<group>"; };
+		CFB603F6BB1A41C38670FDDB /* EnhancedGroupOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnhancedGroupOverlayView.swift; sourceTree = "<group>"; };
+		DDFCB8512E13189D0085F0AE /* ADVTemplate.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = ADVTemplate.xml; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -85,6 +92,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				DDB394AE2DBAFEE300A63019 /* AudioKit in Frameworks */,
+				DDFCB8552E1319AF0085F0AE /* Waveform in Frameworks */,
 				DDB394AC2DBAFEDB00A63019 /* AudioKitUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -137,8 +145,11 @@
 		DD7A8D3D2DB56B6400B3363E /* AbletonSampler */ = {
 			isa = PBXGroup;
 			children = (
+				DDFCB8512E13189D0085F0AE /* ADVTemplate.xml */,
 				DDFCB8432E11E0020085F0AE /* GroupManagementPanel.swift */,
 				DDFCB8442E11E0020085F0AE /* GroupOverlayView.swift */,
+				67F278990F6843FF8D52EAC3 /* GroupsAssignmentView.swift */,
+				CFB603F6BB1A41C38670FDDB /* EnhancedGroupOverlayView.swift */,
 				DDFCB8452E11E0020085F0AE /* TransientGroup.swift */,
 				DDFCB83F2E11C9830085F0AE /* BatchImportView.swift */,
 				DDFCB8402E11C9830085F0AE /* FileNameParser.swift */,
@@ -205,6 +216,7 @@
 			packageProductDependencies = (
 				DDB394AB2DBAFEDB00A63019 /* AudioKitUI */,
 				DDB394AD2DBAFEE300A63019 /* AudioKit */,
+				DDFCB8542E1319AF0085F0AE /* Waveform */,
 			);
 			productName = AbletonSampler;
 			productReference = DD7A8D3B2DB56B6400B3363E /* AbletonSampler.app */;
@@ -281,6 +293,7 @@
 			packageReferences = (
 				DD7A8D6D2DB59A0B00B3363E /* XCRemoteSwiftPackageReference "AudioKit" */,
 				DD7A8D722DB59DA700B3363E /* XCRemoteSwiftPackageReference "AudioKitUI" */,
+				DDFCB8532E1319AE0085F0AE /* XCRemoteSwiftPackageReference "Waveform" */,
 			);
 			productRefGroup = DD7A8D3C2DB56B6400B3363E /* Products */;
 			projectDirPath = "";
@@ -300,6 +313,7 @@
 			files = (
 				DD7A8D462DB56B6600B3363E /* Preview Assets.xcassets in Resources */,
 				DD7A8D432DB56B6600B3363E /* Assets.xcassets in Resources */,
+				DDFCB8522E13189D0085F0AE /* ADVTemplate.xml in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -340,6 +354,8 @@
 				DDFCB8462E11E0020085F0AE /* TransientGroup.swift in Sources */,
 				DDFCB8472E11E0020085F0AE /* GroupOverlayView.swift in Sources */,
 				DDFCB8482E11E0020085F0AE /* GroupManagementPanel.swift in Sources */,
+				364477910AEF47E096E165D5 /* GroupsAssignmentView.swift in Sources */,
+				13F69843CF364560BE51177F /* EnhancedGroupOverlayView.swift in Sources */,
 				DDFCB8422E11C9830085F0AE /* FileNameParser.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -681,6 +697,14 @@
 				minimumVersion = 0.3.7;
 			};
 		};
+		DDFCB8532E1319AE0085F0AE /* XCRemoteSwiftPackageReference "Waveform" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/AudioKit/Waveform.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.2;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -693,6 +717,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = DD7A8D6D2DB59A0B00B3363E /* XCRemoteSwiftPackageReference "AudioKit" */;
 			productName = AudioKit;
+		};
+		DDFCB8542E1319AF0085F0AE /* Waveform */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DDFCB8532E1319AE0085F0AE /* XCRemoteSwiftPackageReference "Waveform" */;
+			productName = Waveform;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

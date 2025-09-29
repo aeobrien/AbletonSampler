@@ -1107,16 +1107,8 @@ struct SampleDetailView: View {
                                     // Frame uses calculated totalContentWidth for scrolling
                                     .frame(width: totalContentWidth, height: geometry.size.height)
                                  } // End ZStack
-                                 .background(GeometryReader { geo in
-                                      Color.clear.preference(key: ScrollOffsetPreferenceKey.self,
-                                                            value: geo.frame(in: .named("detailScrollView")).origin)
-                                  })
                             } // End ScrollView
-                            .coordinateSpace(name: "detailScrollView")
                             .scrollDisabled(timeZoomScale <= 1.0)
-                            .onPreferenceChange(ScrollOffsetPreferenceKey.self) { newOffset in
-                                self.scrollOffset = newOffset
-                            }
                         } // End ScrollViewReader
                     } // End GeometryReader for Waveform Canvas
 
